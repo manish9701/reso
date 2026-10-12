@@ -42,6 +42,10 @@ export interface LiquidUniforms {
   uInkDensity: { value: THREE.Vector2 };
   uTime: { value: number };
   uMicro: { value: number };
+  /** fraction of the shading relief the refracted path follows */
+  uReliefMix: { value: number };
+  /** caustic self-shadowing strength */
+  uShadowMix: { value: number };
   uDebug: { value: number };
 }
 
@@ -105,6 +109,12 @@ uniform vec2 uInkDensity;    // (absorbance scale, mass scale) for Beer–Lamber
 uniform float uTime;
 uniform float uMicro;
 uniform float uDebug;
+uniform float uReliefMix;    // how much relief the refracted path follows
+uniform float uShadowMix;    // caustic self-shadowing strength
+// Caustic self-shadow, computed in the emissive chunk and consumed in the
+// transmission chunk. A file-scope global is the only thing that survives
+// between them — three.js injects each chunk separately into main().
+float gShade = 0.0;
 varying vec2 vLuv;
 varying float vH;
 
@@ -116,6 +126,23 @@ float vnoise(vec2 p) {
              mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 float maxComp(vec3 v) { return max(v.x, max(v.y, v.z)); }
+
+/**
+ * Height gradient from the live field, wide-averaged so it stays smooth.
+ *
+ * Shared by the shading normal and the refraction on purpose. When these were
+ * computed separately, the bowl seen THROUGH the water never agreed with the
+ * ripples seen ON it, and the composite read as two unrelated images stapled
+ * together. One function, one field, one answer.
+ */
+vec2 fieldGrad(vec2 uv, vec2 texel) {
+  vec2 e = texel * 2.0;
+  float hL = (texture2D(uField, uv - vec2(e.x, 0.0)).r + texture2D(uField, uv - vec2(texel.x, 0.0)).r) * 0.5;
+  float hR = (texture2D(uField, uv + vec2(e.x, 0.0)).r + texture2D(uField, uv + vec2(texel.x, 0.0)).r) * 0.5;
+  float hD = (texture2D(uField, uv - vec2(0.0, e.y)).r + texture2D(uField, uv - vec2(0.0, texel.y)).r) * 0.5;
+  float hU = (texture2D(uField, uv + vec2(0.0, e.y)).r + texture2D(uField, uv + vec2(0.0, texel.y)).r) * 0.5;
+  return vec2(hR - hL, hU - hD) * 0.5 / e.x;
+}
 `;
 
 export function createLiquidMaterial(): {
@@ -170,6 +197,12 @@ export function createLiquidMaterial(): {
     uInkDensity: { value: new THREE.Vector2(1.35, 2.6) },
     uTime: { value: 0 },
     uMicro: { value: 0.020 },
+    // Fraction of the shading relief the refracted path follows. High enough
+    // that the bowl bends WITH the ripples (one coherent water), low enough
+    // that rays stay inside the vessel instead of sampling the dark studio.
+    uReliefMix: { value: 0.55 },
+    // How strongly caustic crests shadow the troughs behind them.
+    uShadowMix: { value: 1 },
     uDebug: { value: 0 },
   };
 
@@ -241,16 +274,8 @@ varying float vH;`,
         /* glsl */ `#include <normal_fragment_maps>
 {
   vec2 luv = vLuv;
-  // Wide, averaged central difference. A 1-texel difference amplifies the
-  // field's texel noise straight into the shading normal, which is what makes
-  // a surface look grainy rather than liquid. Averaging over a 2-texel span
-  // low-passes it and gives the smooth, continuous surface water has.
-  vec2 e = uTexel * 2.0;
-  float hL = (texture2D(uField, luv - vec2(e.x, 0.0)).r + texture2D(uField, luv - vec2(uTexel.x, 0.0)).r) * 0.5;
-  float hR = (texture2D(uField, luv + vec2(e.x, 0.0)).r + texture2D(uField, luv + vec2(uTexel.x, 0.0)).r) * 0.5;
-  float hD = (texture2D(uField, luv - vec2(0.0, e.y)).r + texture2D(uField, luv - vec2(0.0, uTexel.y)).r) * 0.5;
-  float hU = (texture2D(uField, luv + vec2(0.0, e.y)).r + texture2D(uField, luv + vec2(0.0, uTexel.y)).r) * 0.5;
-  vec2 gradUv = vec2(hR - hL, hU - hD) * 0.5 / e.x; // ∂h/∂uv
+  // Shared with the refraction below — see fieldGrad(). One field, one answer.
+  vec2 gradUv = fieldGrad(luv, uTexel); // ∂h/∂uv
   vec2 slope = gradUv * uAmp * uNormalGain / (2.0 * uR);
   // a real surface has a physical slope limit; clamping keeps a strong
   // optical gain from tipping the surface past vertical into CG-looking facets
@@ -288,23 +313,16 @@ varying float vH;`,
         '#include <color_fragment>',
         /* glsl */ `#include <color_fragment>
 vec2 luvC = vLuv;
+
 // refraction: the ink layer shifts with the surface normal (guide §6.3)
 vec2 dyeUv = clamp(luvC + vec2(0.0), vec2(0.001), vec2(0.999));
 {
-  // Same wide, averaged stencil as the shading normal. A 1-texel difference
-  // measures texel-level jitter in a six-mode field, and since each dye
-  // channel is offset by a slightly different amount, the result is not grain
-  // but COLOURED speckle — rainbow dashes scattered over the whole surface.
-  vec2 re = uTexel * 2.0;
-  float hL = (texture2D(uField, luvC - vec2(re.x, 0.0)).r + texture2D(uField, luvC - vec2(uTexel.x, 0.0)).r) * 0.5;
-  float hR = (texture2D(uField, luvC + vec2(re.x, 0.0)).r + texture2D(uField, luvC + vec2(uTexel.x, 0.0)).r) * 0.5;
-  float hD = (texture2D(uField, luvC - vec2(0.0, re.y)).r + texture2D(uField, luvC - vec2(0.0, uTexel.y)).r) * 0.5;
-  float hU = (texture2D(uField, luvC + vec2(0.0, re.y)).r + texture2D(uField, luvC + vec2(0.0, uTexel.y)).r) * 0.5;
-  vec2 g = vec2(hR - hL, hU - hD) * 0.5 / re.x;
-  // Clamp hard. The dye is a high-frequency 1024² field while the gradient is
-  // estimated at 512², so even a modest offset walks across many texels of ink
-  // and tears the filament into dashes. A small offset reads as gentle bending.
-  g = clamp(g, vec2(-0.28), vec2(0.28));
+  // The SAME gradient the surface is shaded with (fieldGrad above), so the ink
+  // seen through the water sits exactly where the ripple above it bends.
+  // Clamped hard: the dye is 1024² while this gradient is estimated at 512²,
+  // so even a modest offset walks across many texels of ink and tears
+  // filaments into dashes.
+  vec2 g = clamp(fieldGrad(luvC, uTexel), vec2(-0.28), vec2(0.28));
   dyeUv = clamp(luvC - g * uRefract, vec2(0.001), vec2(0.999));
 }
 vec4 dyeS = texture2D(uDye, dyeUv);
@@ -352,7 +370,7 @@ diffuseColor.rgb = uWater;`,
 {
   vec2 luvE = vLuv;
   // Same wide, averaged stencil as the shading normal. A 1-texel Laplacian on
-  // a 512² field aliases per texel and, once clamped, paints the dish with
+  // a six-mode field aliases per texel and, once clamped, paints the dish with
   // hard rectangular blocks instead of soft caustic light.
   vec2 ce = uTexel * 2.0;
   float hC = texture2D(uField, luvE).r;
@@ -373,7 +391,36 @@ diffuseColor.rgb = uWater;`,
   // magnitude too high and every crest clips to solid white, which reads as
   // grey blobs floating on the surface rather than as focused light.
   float caustic = pow(clamp(-lapn * uCausticK, 0.0, 1.0), 1.2);
-  totalEmissiveRadiance += vec3(1.0, 0.99, 0.95) * caustic * uCaustics * (1.0 - cover * 0.45);
+
+  // ---- caustics with self-shadowing -----------------------------------
+  // The old version added light on crests and nothing anywhere else, so the
+  // surface had bright veins floating on an evenly lit plane — no depth at
+  // all. Real caustic light is SHADOWED: a crest blocks light from reaching
+  // the trough just behind it along the light direction. Marching a short way
+  // toward the key light and asking whether anything stands in the way is
+  // what turns the veins into light-and-shade, and that contrast is most of
+  // what sells the water as deep.
+  {
+    vec2 toLight = normalize(vec2(-0.42, -0.91));   // studio key direction, in uv
+    float shade = 0.0;
+    // 5 taps along the light direction; if the surface rises above the line of
+    // sight from this point, this texel is in that crest's shadow.
+    for (int s = 1; s <= 5; s++) {
+      float t = float(s) * 2.4;                    // texels of march
+      vec2 sp = luvE + toLight * uTexel * t;
+      float occl = texture2D(uField, sp).r - texture2D(uField, luvE).r;
+      shade += smoothstep(0.0, 0.035, occl) * (1.0 - float(s) / 6.0);
+    }
+    shade = clamp(shade * 0.34 * uShadowMix, 0.0, 1.0);
+    // crests are lit, troughs fall into shadow
+    float shadeTerm = 1.0 - shade;
+    totalEmissiveRadiance += vec3(1.0, 0.99, 0.95) * caustic * uCaustics
+      * (1.0 - cover * 0.45) * shadeTerm;
+    // Store the shadow for the lighting stage — totalDiffuse does not exist
+    // yet in this chunk, so the ambient occlusion it implies is applied after
+    // transmission instead of here.
+    gShade = shade;
+  }
   // nodal map (debug): bright lines where the raw modal shape crosses zero
   float node = exp(-abs(texture2D(uField, luvE).g) * 11.0);
   totalEmissiveRadiance += vec3(0.16, 0.42, 0.85) * node * uNodal * 0.55;
@@ -404,16 +451,38 @@ diffuseColor.rgb = uWater;`,
 // light path is calmed down, which is both closer to physical reality for a
 // shallow pool and the thing that keeps the bowl visible through the water.
 {
-  vec3 flatN = normalize(transformNormalByInverseViewMatrix(vec3(0.0, 0.0, 1.0), viewMatrix));
+  // UNIFYING THE TWO WATERS.
+  //
+  // three.js refracts using the shading normal, which here carries the whole
+  // cymatic relief. Left alone, the refracted ray swings far enough on a
+  // rippled surface to miss the bowl and sample the dark studio — the hard
+  // black wedges that no amount of gain tuning could remove. A purely flat
+  // normal fixes those but throws away the relief: the bowl under the water
+  // stays rigid while the surface ripples, and the composite reads as two
+  // unrelated images.
+  //
+  // So the refracted path follows the SAME relief as the shading, through the
+  // SAME fieldGrad() the shading normal uses, at a fraction of the strength.
+  // Surface and what lies beneath it now bend together and can never disagree,
+  // while the reduced factor keeps rays inside the vessel.
+  vec2 rg = clamp(fieldGrad(vLuv, uTexel) * uAmp * uNormalGain / (2.0 * uR) * uReliefMix,
+                  vec2(-0.22), vec2(0.22));
+  vec3 objN = normalize(vec3(-rg.x, 1.0, -rg.y));
+  vec3 calmN = normalize(transformNormalByInverseViewMatrix(objN, viewMatrix));
   vec3 wp = vWorldPosition;
   vec3 vv = normalize(cameraPosition - wp);
   vec4 calm = getIBLVolumeRefraction(
-    flatN, vv, material.roughness, material.diffuseContribution, material.specularColorBlended,
+    calmN, vv, material.roughness, material.diffuseContribution, material.specularColorBlended,
     material.specularF90, wp, modelMatrix, viewMatrix, projectionMatrix, material.dispersion,
     material.ior, material.thickness, material.attenuationColor, material.attenuationDistance);
   totalDiffuse = mix(totalDiffuse, calm.rgb, material.transmission);
 }
 totalDiffuse *= dyeAbsorb;
+// Ambient occlusion from the caustic self-shadow computed earlier. A trough
+// behind a crest receives less of everything, not just less caustic, and that
+// ambient loss is most of what makes the relief read as depth rather than as
+// a pattern drawn on a flat sheet.
+totalDiffuse *= 1.0 - gShade * 0.45;
 // A dense pour also scatters light back out of the liquid, which is why real
 // ink in water is luminous rather than a flat cutout — and why a drop of
 // colour is still readable where the refracted bowl behind it is dark.

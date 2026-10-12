@@ -142,9 +142,9 @@ export default function Cymatics() {
     const p = pos(ev);
     e.pointer = p;
     lastPaint.current = p;
-    e.deposit(p.x, p.y, 0.05, 0.5, hexToRgb(pigmentRef.current));
-    e.strike(p.x, p.y, 0.12);
-    setMessage('A colour drop lands; the flow carries it from here.');
+    // The colour is DROPPED, not painted: it falls, lands, and mixes in.
+    e.dropIn(p.x, p.y, hexToRgb(pigmentRef.current), 0.55, 0.02);
+    setMessage('A drop falls; it lands, mixes, and the figure carries it.');
   };
 
   const onMove = (ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -155,12 +155,15 @@ export default function Cymatics() {
     const d = Math.hypot(p.x - prev.x, p.y - prev.y);
     e.pointer = p;
     if (pointerDown.current) {
-      if (d > 0.004) {
-        // drops along the path — interpolated so fast drags stay unbroken
-        const steps = Math.max(1, Math.ceil(d / 0.012));
+      if (d > 0.012) {
+        // A drag is a stream of drops, not a painted line. Spacing them along
+        // the path and spacing them in TIME (below) is what makes it read as
+        // liquid falling rather than a brush stroke being drawn.
+        const steps = Math.max(1, Math.ceil(d / 0.03));
         for (let i = 1; i <= steps; i++) {
           const k = i / steps;
-          e.deposit(prev.x + (p.x - prev.x) * k, prev.y + (p.y - prev.y) * k, 0.038, 0.3, hexToRgb(pigmentRef.current));
+          e.dropIn(prev.x + (p.x - prev.x) * k, prev.y + (p.y - prev.y) * k,
+            hexToRgb(pigmentRef.current), 0.4, 0.016);
         }
         lastPaint.current = p;
       }

@@ -24,6 +24,7 @@ import { ResonanceModel } from '../sim/resonance';
 import { WaveSimulation, SIM_SIZE } from '../sim/wave';
 import { FigureField, FIGURE_GAIN } from '../sim/figure';
 import { PigmentSimulation, DYE_SIZE } from '../sim/pigment';
+import { DropletSystem } from '../sim/droplets';
 import { FullscreenPass, makeTarget } from '../sim/pass';
 import { COMBINE_FS } from '../sim/shaders';
 import { BANKS, besselJ, resolveDrive, VESSEL, type Boundary } from './resonance';
@@ -86,6 +87,7 @@ export class LabEngine {
   private combine: FullscreenPass;
   private fieldTarget: THREE.WebGLRenderTarget;
   private pigment: PigmentSimulation;
+  private droplets: DropletSystem;
   private resonance = new ResonanceModel();
   private breath = 0;
 
@@ -121,6 +123,13 @@ export class LabEngine {
     this.liquid.position.y = LIQUID_Y;
     this.liquid.frustumCulled = false;
     this.studio.scene.add(this.liquid);
+
+    // ---- droplets --------------------------------------------------------
+    // Falling drops of coloured liquid. They are a separate, CPU-integrated
+    // system because their physics is ballistic and their rendering is a few
+    // dozen small meshes — neither of which belongs in a ping-pong GPU pass.
+    this.droplets = new DropletSystem();
+    this.studio.scene.add(this.droplets.group);
 
     // ---- simulation ------------------------------------------------------
     const floatOK = this.studio.renderer.extensions.has('EXT_color_buffer_float')
@@ -168,6 +177,16 @@ export class LabEngine {
   /* interaction — canvas-normalised input → liquid-domain uv          */
   /* ---------------------------------------------------------------- */
 
+  /**
+ * Disc uv → world position on the liquid plane, for placing a falling drop.
+ * The disc maps linearly onto the liquid mesh's xz extent, so this is just an
+ * unproject — no raycast needed, and it stays correct as the dish is reframed.
+ */
+  private dropletUvToWorld = (u: number, v: number): { x: number; z: number } => ({
+    x: (u - 0.5) * 2 * LIQUID_R,
+    z: (v - 0.5) * 2 * LIQUID_R,
+  });
+
   /** Map a canvas point (0..1) into the disc; null when it misses the dish. */
   private toDisc(cx: number, cy: number): { x: number; y: number } | null {
     const p = this.studio.pickLiquid(cx, cy);
@@ -208,6 +227,49 @@ export class LabEngine {
       absorbance: inkAbsorbance(color, 1.0),
     });
   }
+
+  /**
+   * Release a falling drop of `color` above a canvas point.
+   *
+   * This is the interaction the piece is built around: the colour is not
+   * painted where you click, it is DROPPED there. The drop falls under
+   * gravity, impacts the surface, and only then does its pigment enter the
+   * water — where it mixes with whatever is already there and is then carried
+   * by the cymatic flow.
+   */
+  dropIn(cx: number, cy: number, color: [number, number, number], volume = 0.5, radius = 0.018): void {
+    const p = this.toDisc(cx, cy);
+    if (!p) return;
+    this.droplets.spawn(p.x, p.y, color, volume, radius);
+  }
+
+  /** Drops currently falling — surfaced for tests and the hint text. */
+  get dropsInFlight(): number {
+    return this.droplets.inFlight;
+  }
+
+  /**
+   * A drop has reached the water. Release its pigment AND drive the surface.
+   *
+   * The impulse matters as much as the colour: it is what makes the drop feel
+   * like it landed rather than faded in, and the resulting ring is what then
+   * carries the fresh pigment outward into the standing figure.
+   */
+  private onDropLand = (
+    u: number, v: number, radius: number, volume: number,
+    absorbance: [number, number, number],
+  ): void => {
+    this.pigment.enqueue({
+      x: u,
+      y: v,
+      // A drop that has fallen spreads wider than it was, and wider than a
+      // brush dab: it is a volume of liquid dispersing into water.
+      radius: radius * 2.6,
+      amount: volume,
+      absorbance,
+    });
+    this.wave.addImpulse(u, v, 1.1 * volume, Math.max(1e-5, (radius * 2.2) ** 2));
+  };
 
   /** Remove pigment locally without touching the wave state. */
   eraseAt(cx: number, cy: number, radius: number): void {
@@ -257,6 +319,10 @@ export class LabEngine {
       this.drive.freq = this.forcedDrive.freq;
       this.drive.level = this.forcedDrive.level;
     }
+
+    // 0. droplets fall first, so a landing this frame is picked up by the
+    //    wave and pigment passes below in the same tick
+    this.droplets.step(dt, this.dropletUvToWorld, this.onDropLand);
 
     // 1. audio → modal amplitudes (built up / decayed continuously)
     const slots = this.noForce
@@ -398,6 +464,7 @@ export class LabEngine {
       this.combine?.dispose();
       this.fieldTarget?.dispose();
       this.pigment?.dispose();
+      this.droplets?.dispose();
       this.dish?.geometry.dispose();
       (this.dish?.material as THREE.Material | undefined)?.dispose();
       this.liquid?.geometry.dispose();
