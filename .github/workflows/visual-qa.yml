@@ -4,11 +4,14 @@ on:
   push:
     branches:
       - main
-      - cymatics-visual-qa-polish
   pull_request:
     branches:
       - main
   workflow_dispatch:
+
+concurrency:
+  group: cymatics-visual-qa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
