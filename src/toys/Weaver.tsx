@@ -34,7 +34,7 @@ class WeaverEngine {
   dead = false;
   paused = false;
   persistence = 0.985;
-  layer2 = false;
+  layer2 = true;
   showGrid = false;
   color = COLORS[0];
   overture = true;
@@ -144,9 +144,14 @@ class WeaverEngine {
       );
       if (this.layer2) {
         this.strokeSeg(
-          this.pt(t0, this.cur.fx * 1.5, this.cur.fy, this.cur.ph + 1, true),
-          this.pt(t1, this.cur.fx * 1.5, this.cur.fy, this.cur.ph + 1, true),
-          '#ff5fa2', 1.6,
+          this.pt(t0, this.cur.fx * 1.5, this.cur.fy, this.cur.ph + 1.0, true),
+          this.pt(t1, this.cur.fx * 1.5, this.cur.fy, this.cur.ph + 1.0, true),
+          '#ff5fa2', 1.05,
+        );
+        this.strokeSeg(
+          this.pt(t0, this.cur.fx, this.cur.fy * 1.5, this.cur.ph - 0.72, true),
+          this.pt(t1, this.cur.fx, this.cur.fy * 1.5, this.cur.ph - 0.72, true),
+          '#46d7ef', 0.8,
         );
       }
     }
@@ -155,14 +160,40 @@ class WeaverEngine {
 
   strokeSeg(a: [number, number], b: [number, number], col: string, w: number) {
     const c = this.tx;
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     c.save();
-    c.strokeStyle = col; c.lineCap = 'round'; c.lineJoin = 'round';
-    c.shadowColor = col; c.shadowBlur = 8 * dpr;
-    c.globalAlpha = 0.92; c.lineWidth = w * dpr;
-    c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke();
-    c.shadowBlur = 0; c.globalAlpha = 0.5; c.strokeStyle = '#ffffff'; c.lineWidth = 0.7 * dpr;
-    c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke();
+    c.globalCompositeOperation = 'lighter';
+    c.lineCap = 'round';
+    c.lineJoin = 'round';
+    c.beginPath();
+    c.moveTo(a[0], a[1]);
+    c.lineTo(b[0], b[1]);
+
+    // Three controlled layers: a broad atmospheric halo, a saturated filament,
+    // and a tiny pearl core. Keeping the halo on the trail canvas gives the
+    // curve a luminous material quality without a heavyweight shader.
+    c.strokeStyle = col;
+    c.globalAlpha = 0.10;
+    c.lineWidth = w * 7.0 * dpr;
+    c.shadowColor = col;
+    c.shadowBlur = 12 * dpr;
+    c.stroke();
+
+    c.globalAlpha = 0.72;
+    c.lineWidth = w * 1.45 * dpr;
+    c.shadowBlur = 4.5 * dpr;
+    c.stroke();
+
+    c.globalAlpha = 0.62;
+    c.strokeStyle = col;
+    c.lineWidth = w * 0.55 * dpr;
+    c.shadowBlur = 0;
+    c.stroke();
+
+    c.globalAlpha = 0.43;
+    c.strokeStyle = '#fff7ff';
+    c.lineWidth = Math.max(0.45, 0.38 * dpr);
+    c.stroke();
     c.restore();
   }
 
@@ -199,16 +230,42 @@ class WeaverEngine {
   }
 
   exportSVG(): string {
-    // trace the recent path of the primary pen into a vector polyline
-    const pts: string[] = [];
-    const N = 1600;
-    const t1 = this.tt, t0 = this.tt - 9;
-    for (let i = 0; i <= N; i++) {
-      const t = t0 + ((t1 - t0) * i) / N;
-      const [x, y] = this.pt(t, this.cur.fx, this.cur.fy, this.cur.ph, false);
-      pts.push(`${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`);
-    }
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${this.W} ${this.H}" width="${this.W}" height="${this.H}"><rect width="100%" height="100%" fill="#04050a"/><path d="${pts.join(' ')}" fill="none" stroke="${this.color}" stroke-width="${(2.1 * Math.min(window.devicePixelRatio || 1, 1.75)).toFixed(1)}" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const makePath = (fx: number, fy: number, ph: number, layer: boolean) => {
+      const pts: string[] = [];
+      const N = 2600;
+      const t1 = this.tt, t0 = this.tt - 9;
+      for (let i = 0; i <= N; i++) {
+        const t = t0 + ((t1 - t0) * i) / N;
+        const [x, y] = this.pt(t, fx, fy, ph, layer);
+        pts.push(`${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`);
+      }
+      return pts.join(' ');
+    };
+    const d1 = makePath(this.cur.fx, this.cur.fy, this.cur.ph, false);
+    const d2 = this.layer2 ? makePath(this.cur.fx * 1.5, this.cur.fy, this.cur.ph + 1.0, true) : '';
+    const d3 = this.layer2 ? makePath(this.cur.fx, this.cur.fy * 1.5, this.cur.ph - 0.72, true) : '';
+    const width = Math.max(1.25, 2.1 * Math.min(window.devicePixelRatio || 1, 1.5));
+    const secondary = Math.max(0.85, 1.05 * Math.min(window.devicePixelRatio || 1, 1.5));
+    const bg = '#050711';
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${this.W} ${this.H}" width="${this.W}" height="${this.H}">
+<defs>
+  <linearGradient id="weaver-spectrum" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#46e0d2"/><stop offset="28%" stop-color="#5b8cff"/>
+    <stop offset="54%" stop-color="#a06bff"/><stop offset="78%" stop-color="#ff5fa2"/>
+    <stop offset="100%" stop-color="#ffb35c"/>
+  </linearGradient>
+  <radialGradient id="weaver-bg"><stop offset="0%" stop-color="#0b1020"/><stop offset="100%" stop-color="${bg}"/></radialGradient>
+  <filter id="weaver-glow" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="3.2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+<rect width="100%" height="100%" fill="url(#weaver-bg)"/>
+<path d="${d1}" fill="none" stroke="url(#weaver-spectrum)" stroke-width="${width * 5}" opacity=".12" filter="url(#weaver-glow)" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="${d1}" fill="none" stroke="url(#weaver-spectrum)" stroke-width="${width}" opacity=".92" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="${d1}" fill="none" stroke="#fff8ff" stroke-width=".65" opacity=".52" stroke-linecap="round" stroke-linejoin="round"/>
+${d2 ? `<path d="${d2}" fill="none" stroke="#ff5fa2" stroke-width="${secondary * 4}" opacity=".12" filter="url(#weaver-glow)" stroke-linecap="round" stroke-linejoin="round"/><path d="${d2}" fill="none" stroke="#ff5fa2" stroke-width="${secondary}" opacity=".74" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+${d3 ? `<path d="${d3}" fill="none" stroke="#46d7ef" stroke-width="${secondary * 3}" opacity=".11" filter="url(#weaver-glow)" stroke-linecap="round" stroke-linejoin="round"/><path d="${d3}" fill="none" stroke="#46d7ef" stroke-width="${secondary * 0.7}" opacity=".68" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+</svg>`;
   }
 }
 
@@ -228,7 +285,7 @@ export default function Weaver() {
   const [speed, setSpeed] = useState(0.9);
   const [color, setColor] = useState(0);
   const [fade, setFade] = useState(0.985);
-  const [layer, setLayer] = useState(false);
+  const [layer, setLayer] = useState(true);
   const [grid, setGrid] = useState(false);
   const [paused, setPaused] = useState(false);
   const [overture, setOverture] = useState(true);
