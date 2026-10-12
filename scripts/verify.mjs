@@ -92,13 +92,12 @@ if (!health.liquidVisible) errors.push('RENDER: liquid is not visible');
 await page.screenshot({ path: path.join(OUT, 'rt-1-idle.png') });
 
 // frame rate probe (headless runs on SwiftShader — expect low numbers there)
-const fps = await page.evaluate(() => new Promise((resolve) => {
+const fps = await page.evaluate((duration) => new Promise((resolve) => {
   let n = 0;
   const t0 = performance.now();
-  const duration = FAST ? 800 : 2000;
   const tick = () => { n++; if (performance.now() - t0 < duration) requestAnimationFrame(tick); else resolve(n / (duration / 1000)); };
   requestAnimationFrame(tick);
-}));
+}), FAST ? 800 : 2000);
 console.log('FPS:', fps.toFixed(1));
 
 await wait(6000);
