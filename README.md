@@ -19,7 +19,7 @@ npm run preview
 - **Click or tap:** strike the surface and release a stronger ripple.
 - **Drag:** release pigment. The pigment field is carried by the simulated wave-gradient flow, diffuses gently and refracts under the moving surface.
 - **Pigment palette:** choose lagoon, ultramarine, orchid, fuchsia, amber or pearl.
-- **Tone:** play a generated sine tone; adjust frequency to change the cymatics-like radial standing-wave mode.
+- **Tone:** play a generated sine tone; adjust frequency to change the cymatics-like radial standing-wave mode. The current plate mode (e.g. 3×2) is shown next to the slider — sliding frequency snaps the water through distinct Chladni geometries.
 - **Mic:** explicitly grant microphone access to let nearby sound drive the water. Microphone input is analysed but not monitored back to the speakers.
 - **Load audio:** play a local audio file and use its amplitude and dominant frequency to drive the water.
 - **Clear / Save study:** reset the pigment and waves or export the current render as a PNG.

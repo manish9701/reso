@@ -150,6 +150,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .frequency-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .frequency-heading output { color: #d9e8ee; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .frequency-heading small { color: #78909c; font-size: 8px; }
+.mode-chip { font-size: 9px; font-weight: 800; letter-spacing: 0.14em; color: #8de5df; border: 1px solid #23404a; background: rgba(141, 229, 223, 0.07); border-radius: 99px; padding: 3px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .frequency-control input[type="range"] { width: 100%; height: 3px; cursor: pointer; accent-color: #8de5df; }
 .utility-buttons { display: flex; gap: 7px; align-items: center; flex: none; }
 .icon-button, .save-button {

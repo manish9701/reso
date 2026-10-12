@@ -17,6 +17,23 @@ type Wave = { x: number; y: number; born: number; amp: number; k: number; omega:
 type AudioMetrics = { level: number; pitch: number };
 type InputMode = 'idle' | 'tone' | 'mic' | 'file';
 
+// Chladni plate modes: pairs chosen so sliding frequency snaps through
+// visibly distinct geometries, like frets on an instrument.
+const MODES: Array<[number, number]> = [
+  [1, 1], [2, 1], [2, 2], [3, 1], [3, 2],
+  [4, 2], [4, 3], [5, 3], [5, 4], [6, 4],
+];
+const PI = Math.PI;
+function modeIndexForPitch(pitch: number): number {
+  return Math.min(MODES.length - 1, Math.max(0, Math.round(pitch * (MODES.length - 1))));
+}
+// TypeScript twin of the shader's plate figure (u in 0..1, v up in 0..1).
+function chladni(u: number, v: number, m: number, n: number, t: number): number {
+  const a = Math.sin(PI * m * u) * Math.sin(PI * n * v);
+  const b = Math.sin(PI * n * u) * Math.sin(PI * m * v);
+  return a * Math.cos(t * 1.3) + b * Math.sin(t * 1.3);
+}
+
 const WATER_FRAGMENT = `
 precision highp float;
 uniform vec2 res;
@@ -25,9 +42,17 @@ uniform sampler2D dyeTex;
 uniform vec4 waveData[${MAX_WAVES}];
 uniform vec4 waveShape[${MAX_WAVES}];
 uniform float audioLevel;
-uniform float audioPitch;
+uniform vec2 modeA;
+uniform vec2 modeB;
+uniform float modeBlend;
 uniform vec2 pointer;
 uniform float aspect;
+
+float chladni(vec2 q, vec2 mn, float t) {
+  float a = sin(3.14159 * mn.x * q.x) * sin(3.14159 * mn.y * q.y);
+  float b = sin(3.14159 * mn.y * q.x) * sin(3.14159 * mn.x * q.y);
+  return a * cos(t * 1.3) + b * sin(t * 1.3);
+}
 
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -70,25 +95,33 @@ void main() {
     }
   }
 
-  // Sound excites a cymatics-like plate mode: radial nodes are bent by an
-  // angular harmonic. Loudness animates the mode; pitch changes ring density
-  // and the number of lobes, so audio changes the geometry rather than just
-  // scaling a visualizer.
-  float radius = length(p);
-  float theta = atan(p.y, p.x);
-  float modeN = 3.0 + floor(audioPitch * 6.0);
-  float modeK = 15.0 + audioPitch * 37.0;
-  float modeShape = radius * modeK + 0.42 * cos(theta * modeN);
-  float temporal = cos(time * (1.25 + audioPitch * 8.0));
-  float standing = sin(modeShape) * temporal;
-  float soundField = standing * audioLevel * 1.7;
+  // A true Chladni plate figure: two rectilinear modes superposed while the
+  // figure breathes between orientations. Frequency snaps the (m, n) pair,
+  // so pitch changes geometry rather than just scaling a visualizer.
+  // The plate is always faintly alive (drive floor); sound makes it blaze.
+  float temporal = cos(time * (1.1 + audioLevel * 2.2));
+  float drive = 0.26 + min(audioLevel * 1.5, 1.0);
+  float mA = chladni(uv, modeA, time);
+  float mB = chladni(uv, modeB, time);
+  float standing = mix(mA, mB, modeBlend) * temporal;
+  float soundField = standing * drive * 1.7;
   field += soundField;
 
-  vec2 radialDir = p / max(radius, 0.025);
-  vec2 tangentDir = vec2(-radialDir.y, radialDir.x);
-  float radialSlope = modeK * cos(modeShape) * temporal;
-  float angularSlope = -0.42 * modeN * sin(theta * modeN) * cos(modeShape) * temporal / max(radius, 0.08);
-  vec2 normalGrad = grad + audioLevel * (radialDir * radialSlope + tangentDir * angularSlope) * 0.16;
+  // Gradient of the plate figure (finite differences) for normals + refraction.
+  float ce = 0.012;
+  float pAx = chladni(uv + vec2(ce, 0.0), modeA, time);
+  float pBx = chladni(uv + vec2(ce, 0.0), modeB, time);
+  float mAx = chladni(uv - vec2(ce, 0.0), modeA, time);
+  float mBx = chladni(uv - vec2(ce, 0.0), modeB, time);
+  float pAy = chladni(uv + vec2(0.0, ce), modeA, time);
+  float pBy = chladni(uv + vec2(0.0, ce), modeB, time);
+  float mAy = chladni(uv - vec2(0.0, ce), modeA, time);
+  float mBy = chladni(uv - vec2(0.0, ce), modeB, time);
+  vec2 plateGrad = vec2(
+    (mix(pAx, pBx, modeBlend) - mix(mAx, mBx, modeBlend)) / (2.0 * ce),
+    (mix(pAy, pBy, modeBlend) - mix(mAy, mBy, modeBlend)) / (2.0 * ce)
+  ) * temporal;
+  vec2 normalGrad = grad + plateGrad * (0.10 + drive * 0.30);
 
   // Refract the accumulated pigment through the moving surface normal.
   vec2 displacement = clamp(normalGrad * 0.00125, vec2(-0.025), vec2(0.025));
@@ -116,8 +149,16 @@ void main() {
   // Colored matter stays broad and translucent; wave crests pull thin edges
   // of pigment into filaments and give the liquid a glassy, wet surface.
   col += pigment * vec3(1.08, 1.03, 1.12) * 2.35;
-  float nodal = exp(-abs(sin(field * 1.85)) * 22.0) * min(1.0, abs(field) * 0.65);
-  col += spectrum(field * 0.055 + 0.18) * nodal * (0.025 + audioLevel * 0.07);
+  // Nodal filaments: luminous lines where the plate stands still.
+  float node = exp(-standing * standing * 26.0);
+  vec3 filament = mix(vec3(0.42, 0.95, 1.0), vec3(1.0, 0.55, 0.88), 0.5 + 0.5 * sin(standing * 4.0 + time * 0.4));
+  col += filament * node * (0.10 + drive * 0.60);
+  // Anti-node wash: broad luminous breath between the node lines.
+  col += spectrum(standing * 0.35 + 0.10) * smoothstep(0.05, 0.95, abs(standing)) * (0.05 + drive * 0.30);
+  // Soft glow that follows the cursor across the surface.
+  vec2 pc = (pointer - 0.5) * vec2(aspect, 1.0);
+  float pdist = length(p - pc);
+  col += vec3(0.35, 0.85, 0.95) * exp(-pdist * pdist * 90.0) * 0.10;
   col += ringColor * 0.78;
   float spec = pow(clamp(1.0 - abs(field * 0.24 + length(normalGrad) * 0.012), 0.0, 1.0), 22.0);
   col += vec3(0.68, 0.88, 1.0) * spec * (0.12 + fresnel * 0.11);
@@ -155,6 +196,14 @@ class CymaticWater {
   pointer = { x: 0.5, y: 0.5 };
   audioLevel = 0;
   audioPitch = 0.25;
+  modeA: [number, number] = [2, 2];
+  modeB: [number, number] = [2, 2];
+  modeBlend = 1;
+  modeIdx = 2;
+  pendingIdx = 2;
+  pendingTime = 0;
+  onModeChange: ((idx: number) => void) | null = null;
+  plateGrid = new Float32Array(56 * 40 * 3);
   lastAudioWave = -1;
   hueIndex = 0;
 
@@ -167,7 +216,7 @@ class CymaticWater {
     if (!gl) throw new Error('WebGL is unavailable in this browser.');
     this.gl = gl;
     this.program = createProgram(gl, FULLSCREEN_VS, WATER_FRAGMENT);
-    for (const name of ['res', 'time', 'dyeTex', 'waveData', 'waveShape', 'audioLevel', 'audioPitch', 'pointer', 'aspect']) {
+    for (const name of ['res', 'time', 'dyeTex', 'waveData', 'waveShape', 'audioLevel', 'modeA', 'modeB', 'modeBlend', 'pointer', 'aspect']) {
       this.uniforms[name] = gl.getUniformLocation(this.program, name === 'waveData' || name === 'waveShape' ? name + '[0]' : name);
     }
     const tex = gl.createTexture();
@@ -238,7 +287,9 @@ class CymaticWater {
 
   deposit(x: number, y: number, colorHex: string, amount = 0.7, radius = 0.06) {
     const rgb = [1, 3, 5].map((n) => parseInt(colorHex.slice(n, n + 2), 16) / 255);
-    const cx = x * (this.dyeWidth - 1), cy = y * (this.dyeHeight - 1);
+    // NOTE: the dye texture uploads with UNPACK_FLIP_Y, so canvas row y lives
+    // at texture row (1 - y): deposit flipped to land under the pointer.
+    const cx = x * (this.dyeWidth - 1), cy = (1 - y) * (this.dyeHeight - 1);
     const r = Math.max(3, Math.round(radius * Math.min(this.dyeWidth, this.dyeHeight)));
     const x0 = Math.max(0, Math.floor(cx - r * 2.5)), x1 = Math.min(this.dyeWidth - 1, Math.ceil(cx + r * 2.5));
     const y0 = Math.max(0, Math.floor(cy - r * 2.5)), y1 = Math.min(this.dyeHeight - 1, Math.ceil(cy + r * 2.5));
@@ -283,12 +334,35 @@ class CymaticWater {
       const d = Math.hypot(dx, dy) + 0.001;
       const envelope = w.amp * Math.exp(-age * 0.95) * Math.exp(-d * w.decay);
       const theta = d * w.k - age * w.omega + w.phase;
-      const radial = Math.cos(theta) * envelope * 0.48;
+      const radial = Math.cos(theta) * envelope * 0.62;
       const tangential = Math.sin(theta * 0.5) * envelope * 0.055;
       vx += (dx / d) * radial / aspect - (dy / d) * tangential;
       vy += (dy / d) * radial + (dx / d) * tangential;
     }
     return { x: vx, y: vy };
+  }
+
+  // Plate figure value (no temporal factor — direction is time-invariant).
+  plateFigure(u: number, v: number): number {
+    const t = this.time;
+    const A = chladni(u, v, this.modeA[0], this.modeA[1], t);
+    const B = chladni(u, v, this.modeB[0], this.modeB[1], t);
+    return A + (B - A) * this.modeBlend;
+  }
+
+  // Coarse plate grid (value + gradient) rebuilt once per frame; the dense
+  // advection loop bilinear-samples it instead of evaluating trig per cell.
+  computePlateGrid() {
+    const GW2 = 56, GH2 = 40, e = 0.008;
+    const g = this.plateGrid;
+    for (let j = 0; j < GH2; j++) for (let i = 0; i < GW2; i++) {
+      const u = i / (GW2 - 1), v = j / (GH2 - 1);
+      const M = this.plateFigure(u, v);
+      const gx = (this.plateFigure(Math.min(1, u + e), v) - this.plateFigure(Math.max(0, u - e), v)) / (2 * e);
+      const gy = (this.plateFigure(u, Math.min(1, v + e)) - this.plateFigure(u, Math.max(0, v - e))) / (2 * e);
+      const o = (j * GW2 + i) * 3;
+      g[o] = M; g[o + 1] = gx; g[o + 2] = gy;
+    }
   }
 
   step(dt: number, metrics: AudioMetrics, audioActive: boolean) {
@@ -298,6 +372,32 @@ class CymaticWater {
     this.audioLevel += (metrics.level - this.audioLevel) * Math.min(1, delta * 5.5);
     this.audioPitch += (metrics.pitch - this.audioPitch) * Math.min(1, delta * 3.2);
     this.waves = this.waves.filter((w) => this.time - w.born < 4.8);
+
+    // Retarget the (m, n) pair only once the pitch is stable, then crossfade
+    // the figure so geometry morphs instead of popping.
+    const targetIdx = modeIndexForPitch(this.audioPitch);
+    if (targetIdx !== this.modeIdx) {
+      if (targetIdx !== this.pendingIdx) {
+        this.pendingIdx = targetIdx;
+        this.pendingTime = this.time;
+      } else if (this.time - this.pendingTime > 0.35) {
+        const k = this.modeBlend;
+        this.modeA = [
+          this.modeA[0] + (this.modeB[0] - this.modeA[0]) * k,
+          this.modeA[1] + (this.modeB[1] - this.modeA[1]) * k,
+        ];
+        const [nm, nn] = MODES[targetIdx];
+        this.modeB = [nm, nn];
+        this.modeIdx = targetIdx;
+        this.modeBlend = 0;
+        this.onModeChange?.(targetIdx);
+      }
+    } else {
+      this.pendingIdx = targetIdx;
+      this.pendingTime = this.time;
+    }
+    if (this.modeBlend < 1) this.modeBlend = Math.min(1, this.modeBlend + delta / 0.9);
+    this.computePlateGrid();
 
     if (audioActive && this.audioLevel > 0.025 && this.time - this.lastAudioWave > 0.115) {
       this.addWave(this.pointer.x, this.pointer.y, clamp(this.audioLevel * 3.1, 0.12, 0.92), this.audioPitch);
@@ -315,15 +415,35 @@ class CymaticWater {
       const backX = x - flow.x * flowScale * w + Math.sin(nY * 9 + this.time * 0.19) * 0.11;
       const backY = y - flow.y * flowScale * h + Math.cos(nX * 8 - this.time * 0.17) * 0.09;
 
+      // Nodal gathering: pigment migrates toward the still node lines, the
+      // signature cymatics behavior. Sampled from the coarse plate grid
+      // (v up, rows down) and applied as an uphill sampling offset.
+      const gu = nX * 55, gv = (1 - nY) * 39;
+      const gi = Math.min(54, Math.floor(gu)), gj = Math.min(38, Math.floor(gv));
+      const fu = gu - gi, fv = gv - gj;
+      const pg = this.plateGrid;
+      const s00 = (gj * 56 + gi) * 3, s10 = s00 + 3, s01 = s00 + 56 * 3, s11 = s01 + 3;
+      const bilerp = (o: number) => (pg[o] * (1 - fu) + pg[o + 3] * fu) * (1 - fv) + (pg[o + 56 * 3] * (1 - fu) + pg[o + 56 * 3 + 3] * fu) * fv;
+      const Mf = bilerp(s00);
+      const gxf = bilerp(s00 + 1);
+      const gyf = bilerp(s00 + 2);
+      const temporal = Math.cos(this.time * (1.1 + this.audioLevel * 2.2));
+      const Mt = Mf * temporal;
+      const sgn = Mt >= 0 ? 1 : -1;
+      const pull = Math.min(1, Math.abs(Mt) * 3 + 0.3) * 12 * delta;
+      const glen = Math.hypot(gxf, gyf) + 1e-4;
+      const sampleX = backX + sgn * (gxf / glen) * pull;
+      const sampleY = backY - sgn * (gyf / glen) * pull;
+
       // Semi-Lagrangian advection with a touch of diffusion. Pigment drifts
-      // with the wave gradient, merges at collisions, and slowly settles.
+      // with the wave gradient, migrates onto node lines, and slowly settles.
       for (let c = 0; c < 4; c++) {
-        const center = this.sample(backX, backY, c, src);
+        const center = this.sample(sampleX, sampleY, c, src);
         const around = (
-          this.sample(backX - 1, backY, c, src) +
-          this.sample(backX + 1, backY, c, src) +
-          this.sample(backX, backY - 1, c, src) +
-          this.sample(backX, backY + 1, c, src)
+          this.sample(sampleX - 1, sampleY, c, src) +
+          this.sample(sampleX + 1, sampleY, c, src) +
+          this.sample(sampleX, sampleY - 1, c, src) +
+          this.sample(sampleX, sampleY + 1, c, src)
         ) * 0.25;
         const diffusion = c === 3 ? 0.012 : 0.023;
         dst[i + c] = clamp((center * (1 - diffusion) + around * diffusion) * (c === 3 ? 0.99988 : 0.9997), 0, 1);
@@ -363,7 +483,9 @@ class CymaticWater {
     gl.uniform4fv(this.uniforms.waveData, waveData);
     gl.uniform4fv(this.uniforms.waveShape, waveShape);
     gl.uniform1f(this.uniforms.audioLevel, this.audioLevel);
-    gl.uniform1f(this.uniforms.audioPitch, this.audioPitch);
+    gl.uniform2f(this.uniforms.modeA, this.modeA[0], this.modeA[1]);
+    gl.uniform2f(this.uniforms.modeB, this.modeB[0], this.modeB[1]);
+    gl.uniform1f(this.uniforms.modeBlend, this.modeBlend);
     gl.uniform2f(this.uniforms.pointer, this.pointer.x, this.pointer.y);
     gl.uniform1f(this.uniforms.aspect, this.cssWidth / this.cssHeight);
     drawFullscreen(gl, this.program);
@@ -527,6 +649,7 @@ export default function Cymatics() {
   const [inputMode, setInputMode] = useState<InputMode>('idle');
   const [audioName, setAudioName] = useState('');
   const [message, setMessage] = useState('Move through the water. Tap to strike a wave; drag to release pigment.');
+  const [modeLabel, setModeLabel] = useState('2×2');
   const [error, setError] = useState('');
   const [hasGL, setHasGL] = useState(true);
 
@@ -540,6 +663,10 @@ export default function Cymatics() {
     try {
       engine = new CymaticWater(canvas);
       engineRef.current = engine;
+      engine.onModeChange = (idx) => {
+        const [m, n] = MODES[idx];
+        setModeLabel(`${m}×${n}`);
+      };
       const resize = () => engine?.resize();
       const observer = new ResizeObserver(resize);
       observer.observe(canvas);
@@ -774,7 +901,7 @@ export default function Cymatics() {
         </div>
 
         <div className="frequency-control">
-          <div className="frequency-heading"><span className="dock-label">TONE FREQUENCY</span><output>{frequency} <small>Hz</small></output></div>
+          <div className="frequency-heading"><span className="dock-label">TONE FREQUENCY</span><output>{frequency} <small>Hz</small></output><span className="mode-chip" title="Standing-wave plate mode">{modeLabel}</span></div>
           <input
             type="range"
             min={70}
