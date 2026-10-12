@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useSettings } from '../lib/settings';
 
 type InstrumentId = 'ink' | 'garden' | 'weaver' | 'moire' | 'fossil';
 
@@ -227,6 +228,7 @@ const DRAWERS: Record<InstrumentId, (ctx: CanvasRenderingContext2D, w: number, h
 
 export function InstrumentPreview({ id }: { id: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const { reduced } = useSettings();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -240,14 +242,13 @@ export function InstrumentPreview({ id }: { id: string }) {
     let last = 0;
     let time = Math.random() * 2;
     let alive = true;
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     const drawer = DRAWERS[id as InstrumentId] ?? drawInk;
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
       width = Math.max(1, rect.width);
       height = Math.max(1, rect.height);
-      dpr = Math.min(window.devicePixelRatio || 1, 1.35);
+      dpr = Math.min(window.devicePixelRatio || 1, 1.25);
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -261,7 +262,7 @@ export function InstrumentPreview({ id }: { id: string }) {
     const tick = (now: number) => {
       if (!alive) return;
       frame = requestAnimationFrame(tick);
-      if (document.hidden || now - last < 1000 / 30) return;
+      if (document.hidden || now - last < 1000 / 24) return;
       last = now;
       time += reduced ? 0.0015 : 0.012;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -275,7 +276,7 @@ export function InstrumentPreview({ id }: { id: string }) {
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [id]);
+  }, [id, reduced]);
 
   return <canvas className={`instrument-preview preview-${id}`} ref={canvasRef} aria-hidden="true" />;
 }
