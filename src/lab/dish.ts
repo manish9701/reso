@@ -82,15 +82,15 @@ export function createDishMaterial(): THREE.MeshPhysicalMaterial {
     // Polished stainless, as in the reference render: a mirror that carries
     // bright silver bands, dark reflected contrast and warm copper streaks.
     // The warmth comes from the studio's copper kickers, not from the tint.
-    color: new THREE.Color(0.86, 0.86, 0.88),
+    color: new THREE.Color(0.92, 0.92, 0.94),
     metalness: 1,
     // True mirror roughness. At 0.16 the wall still scattered the strip lights
     // into a soft grey haze and read as satin; below ~0.08 the lathe reflects
     // the environment sharply and the dish looks pressed and polished.
-    roughness: 0.07,
+    roughness: 0.085,
     anisotropy: 0.35,
     anisotropyRotation: Math.PI / 2,
-    envMapIntensity: 1.5,
+    envMapIntensity: 1.35,
     side: THREE.FrontSide,
   });
   return mat;
