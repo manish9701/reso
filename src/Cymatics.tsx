@@ -15,6 +15,7 @@ const PALETTE = [
 
 type Wave = { x: number; y: number; born: number; amp: number; k: number; omega: number; phase: number; decay: number };
 type AudioMetrics = { level: number; pitch: number; frequencyHz: number };
+type InputMode = 'idle' | 'tone' | 'mic' | 'file';
 
 type ResonantMode = { m: number; root: number; hz: number };
 
