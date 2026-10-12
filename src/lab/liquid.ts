@@ -289,7 +289,12 @@ varying float vH;`,
     // A real water surface cannot stand much past ~30° without breaking up.
     // This clamp is what keeps a strong optical gain from tipping whole lobes
     // past vertical, where they stop reflecting and become flat dark wedges.
-    slope = clamp(slope, vec2(-0.34), vec2(0.34));
+    // Smoothly cap the total slope magnitude instead of clipping X/Y
+    // components independently. A hard clamp creates broad regions with the
+    // same normal, which appear as flat polygon facets in the reflection.
+    // The asymptotic bound remains 0.34 (about 19°), so the liquid stays
+    // shallow while its specular gradient remains continuous.
+    slope = slope / sqrt(1.0 + dot(slope, slope) / (0.34 * 0.34));
 
   // Fine secondary ripple detail (guide §6.5) — a supporting layer only.
   // The epsilon must be SMALLER than the noise's own wavelength (1/34 ≈
@@ -412,14 +417,17 @@ diffuseColor.rgb = uWater;`,
   // grey blobs floating on the surface rather than as focused light.
   float caustic = pow(clamp(-lapn * uCausticK, 0.0, 1.0), 1.2);
 
-  // ---- caustics with self-shadowing -----------------------------------
-  // The old version added light on crests and nothing anywhere else, so the
-  // surface had bright veins floating on an evenly lit plane — no depth at
-  // all. Real caustic light is SHADOWED: a crest blocks light from reaching
-  // the trough just behind it along the light direction. Marching a short way
-  // toward the key light and asking whether anything stands in the way is
-  // what turns the veins into light-and-shade, and that contrast is most of
-  // what sells the water as deep.
+  // ---- caustics with self-shadowing and pigment scattering --------------
+  // Merged from the PR's "keep focused light as a detail" work: the caustic is
+  // weighted by pigment coverage and never clips to white chips, because the
+  // stable nodal geometry has to stay visible through it. On a real Chladni
+  // plate the bright lines ARE the settled powder catching light, so the
+  // caustic only gains strength where dye has actually collected — which is
+  // what makes the figure develop over time instead of appearing instantly.
+  //
+  // The self-shadowing march below is the other half: a crest blocks light
+  // from reaching the trough behind it, and that contrast is most of what
+  // sells the water as deep rather than as a pattern on a flat sheet.
   {
     vec2 toLight = normalize(vec2(-0.42, -0.91));   // studio key direction, in uv
     float shade = 0.0;
@@ -432,18 +440,7 @@ diffuseColor.rgb = uWater;`,
       shade += smoothstep(0.0, 0.035, occl) * (1.0 - float(s) / 6.0);
     }
     shade = clamp(shade * 0.34 * uShadowMix, 0.0, 1.0);
-    // crests are lit, troughs fall into shadow
     float shadeTerm = 1.0 - shade;
-    // Scattering by settled pigment. On a real Chladni plate the bright nodal
-    // lines ARE the accumulated powder catching the light — the figure
-    // develops over time as pigment migrates onto the nodes, rather than
-    // appearing instantly. Weighting the caustic by how much dye has actually
-    // gathered here is what makes it develop: pour ink, wait, and the nodal
-    // filaments brighten as the powder settles into them. With no pigment
-    // present the relief still shows in the reflections, but the strong
-    // scattered light only builds where the figure has actually collected
-    // colour. That is the difference between a drawn pattern and an emergent
-    // one.
     float powder = clamp(cover * 1.4, 0.0, 1.0);
     vec3 lit = vec3(1.0, 0.99, 0.95) * caustic * uCaustics * shadeTerm;
     lit += dyeAbsorb * powder * caustic * 1.6 * uCaustics * shadeTerm;
