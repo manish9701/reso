@@ -2,8 +2,8 @@
 
 **Live (after Pages is enabled):** https://manish9701.github.io/reso/
 
-A single, immersive white-studio cymatics instrument: a shallow glass dish of
-resonating liquid driven by tone / microphone / local audio, with pigment
+A single, immersive white-studio cymatics instrument: a shallow stainless dish
+of resonating liquid driven by tone / microphone / local audio, with pigment
 transported by the surface flow. Built with React 19 + TypeScript + Vite,
 WebGL2 ping-pong simulation, and Web Audio.
 
@@ -15,43 +15,124 @@ npm run dev        # http://localhost:5173
 npm run build      # TypeScript check + production build
 npm run preview    # serve dist/ at :4173
 node scripts/verify.mjs http://localhost:4173/   # real-gesture visual QA
+node scripts/verify.mjs http://localhost:5173/   # exits non-zero on any fault
+node scripts/freqsweep.mjs http://localhost:5173/  # figure at each frequency
 ```
 
 ## Interaction
 
-- **Move cursor** — very light disturbance only (no endless ring trails).
-- **Click / tap** — one local impulse; a travelling wave propagates through
-  the current surface state (emerges from the wave equation, not an overlay).
-- **Drag** — a continuous interpolated pigment stroke that the flow then
-  carries, folds and gathers.
-- **Tone** — a real sine; its frequency is wired *directly* into the mode
-  resolution (no FFT re-detection). Sliding frequency snaps the water through
-  resonant geometries (1:1 … 4:4 angular/radial pairs), blending neighbours.
-- **Mic** — permission-gated, analyser-only (never played back), envelope +
-  spectral centroid drive the figure; claps create transient impulses.
-- **Audio file** — local playback via Web Audio; processed in-browser only.
-- **Presets** — six model states (mode + behaviour + pigment seed), each
-  thumbnail is a true nodal diagram of the target Bessel mode.
-- **Save study** (PNG), **Record** (WebM via MediaRecorder), hide-UI toggle.
+The control surface is deliberately minimal: **one frequency slider and one
+colour dropper.** Everything else is either automatic or hidden.
+
+- **Frequency slider** — the single driver. It is wired *directly* into the
+  mode resolution (no FFT re-detection), so sliding it reorganises the standing
+  figure continuously and raises the water's agitation with it. Low pitches give
+  a few big lobes; high pitches fine concentric rosettes.
+- **Colour dropper + palette** — pick any colour, then click/drag on the water
+  to pour it. Colour is never imposed by the app; the water is coloured only by
+  what you put in it, and it mixes subtractively (blue over yellow → green).
+- **Click / tap** — a colour drop plus a local impulse; a travelling ripple
+  propagates and reflects off the wall (emerges from the wave equation, not an
+  overlay).
+- **Drag** — a continuous interpolated ink stroke that the flow then carries,
+  folds and gathers onto the nodal lines.
+- **Play** — a real sine tone wired straight into the same drive (first click
+  is the gesture that unlocks audio). **Mic** and **audio file** remain
+  available as small utilities; both are analyser-only and processed locally.
+- **Save** (PNG), **Clear**, and a hold/release toggle for the drive.
 
 ## Model layers (spec §5)
 
+The scene is a real 3-D set (lathed glass vessel, subdivided liquid surface,
+white studio with a baked PMREM environment) driven by a GPU field pipeline.
+The field is built in three cooperating parts, each documented where it lives:
+
 | File | Responsibility |
 | --- | --- |
-| `src/lab/resonance.ts` | Mode bank: rigid-wall circular modes — k·R at zeros of J′_m (computed at runtime by bisection); mode frequencies mapped from the capillary–gravity dispersion ω² = (gk + σ/ρ·k³)·tanh(kh) into the audible band through a documented monotonic transform. Frequency → nearest-mode blending with soft weights. |
-| `src/lab/wave.ts` | GLSL passes: mode-field render, damped wave step (symplectic Euler, 6 bounded substeps, circular boundary absorption), pigment advection (semi-Lagrangian + streaming vortices ψ=φ² that spiral ink onto nodal lines), concentration-weighted colour mixing. |
-| `src/lab/engine.ts` | WebGL2 orchestration: ping-pong RGBA16F state + RGBA8 dye buffers (explicitly zeroed — texStorage2D contents are undefined), the optical dish pass (glass rim highlights, meniscus, contact shadow, normal-warped studio reflections, refraction of pigment, caustics, sparkle, nodal overlay, dither), PNG/WebM capture. |
-| `src/lab/audio.ts` | Tone / mic / file input feeding one {freq, level} interface. |
-| `src/lab/presets.ts` | Fixed preset list + nodal-diagram thumbnails. |
-| `src/Cymatics.tsx` | Experience layout: floating left/right rails, transport strip, responsive trays. |
+| `src/lab/resonance.ts` | Mode bank. Circular-domain eigenmodes from tabulated Bessel zeros (`J′_m` for a rigid wall, `J_m` for a free edge), extended to m ≤ 11, n ≤ 9 with the standard large-argument asymptotics (A&S 9.5.12 / 11.4.9). The bank is **dense and sorted by frequency**, so sliding the tone walks the spectrum in order: low pitches give two or three big lobes, high pitches fine concentric rosettes. That ordering is the physics, not styling — in the gravity-dominated regime ω ≈ √(gk), so the wavenumber and therefore the nodal cell count grows with the square of the drive frequency. Frequencies come from the capillary–gravity dispersion ω² = (gk + σ/ρ·k³)·tanh(kh), mapped into the audible band through a documented monotonic transform. Every mode is a driven, damped oscillator; the response keeps one dominant figure plus its nearest neighbours, because four superposed modes read as mush rather than as cymatics. |
+| `src/sim/figure.ts` | **The resonant standing figure, synthesized analytically.** A Bessel mode `J_m(kr)·cos(mθ)` is an exact eigenfunction of the wave operator, so the settled pattern is written straight into a 512² half-float texture each frame as `h = breathing(Φ)·Σ Aᵢ·φᵢ`. This is the physics solved in closed form, not an approximation of it — and it sidesteps a real failure mode of the grid solver: a Bessel mode has nonzero spatial mean, so forcing the grid with it pumps the (undamped) zero mode and drives the field into its rails. Bounded by construction here. |
+| `src/sim/wave.ts` | **Travelling waves on the grid** — the ripple field that pointer strikes excite. Explicit update, fixed 1/480 s substep with capped catch-up, 512² RGBA16F ping-pong, circular rim (Neighbour clamp, never a torus wrap), soft wall absorption. Ripple speed ≈ 179 texels/s, so a strike ring crosses the basin in about 1.4 s. |
+| `src/sim/pigment.ts` + `DYE_FS` | Persistent 1024² half-float dye advected through the combined field. Stored as **optical density**, not colour (rgb = per-channel absorbance, a = mass) and rendered back with **Beer–Lambert** — see "Ink physics" below. Semi-Lagrangian advection with an unsharp correction (semi-Lagrangian is numerically diffusive and turns ink to smoke in a second otherwise). |
+| `src/sim/shaders.ts` | All simulation GLSL: `FIGURE_FS`, `STEP_FS`, `COMBINE_FS`, `DYE_FS`. `COMBINE_FS` sums figure + ripples into one field (r = height, g = raw nodal shape) that the surface and pigment both sample. |
+| `src/lab/dish.ts` | Vessel lathe + **brushed stainless** material (metalness 1, anisotropy for the turned grain). A metal bowl is what makes pigment read: the wall mirrors the ink back into the composition. |
+| `src/lab/studio.ts` | Procedural studio environment baked through PMREM, key/fill/rim lights, ground + contact shadow, and responsive framing. The surround carries a deliberate **vertical brightness gradient** (dark walls, bright softbox, bright floor bounce) because that gradient is what makes water read: a tilt of a couple of degrees swings the reflection between the box and the floor, so relief shows up as light and shade. A *uniformly* lit surround returns the same radiance at every orientation and the figure disappears no matter how much relief the geometry has. The dark end is a mid grey, never black — a near-black room makes every glossy trough clip to pure black and the dish reads as harsh chrome. Output goes through `OutputPass` for tone mapping and the sRGB transfer. |
+| `src/lab/liquid.ts` | The surface: a `MeshPhysicalMaterial` extended via `onBeforeCompile`, keeping full PBR. Injects vertex displacement, a shading normal from the live field, Beer–Lambert ink transmission, refraction, caustics, a nodal overlay and debug views. Pigment also gets a specular kill, so dense ink is a matte film whose colour reads instead of being washed white. The shader patches are **asserted after injection** — `String#replace` against a renamed three.js chunk is a silent no-op, and the symptom is a flat, featureless disc that looks exactly like a broken physics model. |
+| `src/lab/engine.ts` | Orchestration: audio → ResonanceModel → FigureField + WaveSimulation → combine → pigment → material → studio render. Owns capture (Save). |
 
-`?demo=1` runs a scripted sow+strike sequence (used by the verification
-harness); `?debug=dye|mode|h` dumps simulation buffers as greyscale.
+Frame order per tick: **modal amplitudes → analytic figure → travelling-wave
+grid (fixed substeps) → combine → pigment advection → hand fields to the
+surface material → studio render.** Nothing is read back from the GPU per
+frame; the only readback is the optional development probe.
+
+`?demo=1` runs a scripted sow+strike sequence; `?debug=dye|mode|h` dumps the
+dye, nodal-shape, or height buffers as greyscale; `?drive=432&level=0.8`
+overrides the drive, so visual QA does not depend on headless audio autoplay
+(which is unreliable, and a tone that silently never starts invalidates every
+later assertion). `scripts/verify.mjs` treats GLSL compile failures, a flat
+height field and a missing mode set as **hard errors**, and exits non-zero.
+
+## Ink physics (why colours mix correctly)
+
+Pigment is stored as **optical density** and rendered with Beer–Lambert:
+
+```
+A(λ)  = Σ deposits (−ln colour)          absorbs additively, per channel
+T(λ)  = exp(−A(λ) · d)                   what the eye actually receives
+```
+
+Absorbance adding linearly is the whole point: it makes mixing *subtractive*.
+Blue ink over yellow ink transmits blue·green, i.e. **green** — the same result
+real paint gives. Averaging RGB values (the obvious implementation) always
+drifts toward mud, which is exactly the failure mode this model removes.
+
+Channels are limited with a soft `tanh` roll-off rather than a per-channel
+`min`. A hard clamp pins the densest channel and then lets the weaker ones
+catch up to it over the following frames, which silently bleeds every pigment
+toward neutral grey — blue ink ends up rendering as black.
+
+Transport uses **two** fields, because they do different jobs:
+
+1. **Churn** — a divergence-free curl, `v = (∂ψ/∂y, −∂ψ/∂x)`, with the stream
+   function built from the live height and modal shape. A vibrating surface
+   drives *recirculating orbital* flow, which is rotational; a gradient field
+   (∇h) is irrotational by construction and can never produce a swirl, which
+   is why the earlier version stirred without ever mixing. A frequency-scaled
+   ambient stir is added on top, so a higher tone visibly churns faster.
+2. **Chladni migration** — pigment drifts *down the gradient of the squared
+   modal shape*, i.e. onto the nodal lines. This is the mechanism that actually
+   draws the figure: on a real vibrating plate, grains settle where the surface
+   is momentarily still, which is why a Chladni pattern is made of deposited
+   powder rather than of a standing wave you can see. It is a **gradient, and
+   therefore divergent, flow** — it cannot be folded into the curl above without
+   destroying the very migration that makes the pattern legible. Curl alone gives
+   swirling colour but never a figure.
+
+Semi-Lagrangian advection is numerically diffusive and turns ink to smoke within
+a second, so a mild unsharp mask restores filament edges. Its blur kernel must
+be wider (3×3) than the texel jitter advection leaves behind — a 1-texel
+difference measures that jitter, amplifies it, and because it amplifies each
+absorbance channel slightly differently the result is coloured speckle rather
+than grain.
 
 ## Honest limitations
 
-- Physics-grounded but not calibrated: vessel radius/depth are artistic
-  constants; drive coupling is visual. Described as a real-time simulation,
-  not laboratory fluid dynamics.
+- **Modal lock (temporal model).** The audio frequency selects *which* modes
+  respond; the eye sees the standing pattern breathing at a sub-audible rate,
+  not the 60–900 Hz oscillation itself. A 432 Hz ripple cannot be resolved by
+  a 512² / 480 Hz solver (it would alias), and the grid's physical ripple
+  frequencies are ~1 Hz — the same reason visible-rate cymatics footage is shot
+  in slow motion. This is a deliberate, documented temporal scale choice.
+- **Optical normal gain.** A real dish's cymatic relief is millimetres deep and
+  is seen almost entirely as reflection. The geometric displacement stays
+  within a couple of mesh ring-spacings (past that the surface folds and renders
+  as hard wedges); a shading-normal gain (`uNormalGain`) brings the *optical*
+  relief up to a legible level, like a shallow film under a raking studio key,
+  with the slope clamped so a strong gain cannot tip the surface past vertical.
+- The Beer–Lambert model is single-constant Kubelka–Munk (Beer–Lambert), not
+  full two-constant KM: it reproduces subtractive mixing and saturation well,
+  but does not model pigment scattering, granulation or paper interaction.
+- Physics-grounded but not laboratory-calibrated: vessel radius/depth and the
+  frequency→mode mapping are artistic constants; the pigment transport is a
+  documented shallow-flow model, not Navier–Stokes.
 - WebGL2 + `EXT_color_buffer_float` required; a calm explanation shows
   otherwise. Verified in Chrome (desktop + software rendering).
