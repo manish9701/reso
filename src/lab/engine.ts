@@ -1,10 +1,9 @@
 /**
  * LabEngine — orchestration for the Resonant Ink dish.
  *
- * The scene is a real 3D set (guide §3/§4): a lathed glass vessel, a
- * subdivided liquid surface, a white studio with a baked reflection
- * environment, and a GPU simulation pipeline feeding both geometry and
- * shading:
+ * The scene is a real 3D set: a lathed stainless vessel, a subdivided liquid
+ * surface, a white studio with a baked reflection environment, and a GPU
+ * simulation pipeline feeding the surface geometry, shading and pigment:
  *
  *   audio → ResonanceModel (modal amplitudes)
  *         → forcing pass   (Σ Aᵢ·φᵢ)
@@ -137,7 +136,7 @@ export class LabEngine {
       uFigure: { value: this.figure.texture },
       uWave: { value: this.wave.texture },
       uFigureGain: { value: FIGURE_GAIN },
-      uWaveGain: { value: 1.0 },
+      uWaveGain: { value: 0.85 },
     });
 
     this.liquidUniforms.uTexel.value.set(1 / SIM_SIZE, 1 / SIM_SIZE);
@@ -295,10 +294,10 @@ export class LabEngine {
       // Calibrated so a pour visibly migrates toward the nodal filaments
       // within a few seconds — the Chladni drift the whole piece is about.
       gather: this.gather * 0.045,
-      // a small diffusion FLOOR is not cosmetic: it is what suppresses the
-      // texel-level noise that advection + unsharp would otherwise amplify
-      // into rainbow speckle across the whole surface
-      diffusion: Math.max(0.006, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
+        // A slightly higher but bounded diffusion softens texel-level jitter
+      // before it can be sharpened into colored speckle. Flow keeps filaments
+      // coherent; this term only removes unstable high-frequency noise.
+      diffusion: Math.max(0.012, Math.min(0.24, this.diffusion * (0.3 + this.sim.visc * 1.2) * 0.32)),
       relax: 0.998 + this.sim.persist * 0.00195,
       flow: 0.014,
       swirl: 0.026,
