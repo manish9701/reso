@@ -785,7 +785,7 @@ export default function Cymatics() {
     pointerDown.current = true;
     const p = pointerPosition(event);
     engine.pointer = p;
-    engine.addWave(p.x, p.y, 1.0, engine.audioPitch);
+    engine.addWave(p.x, p.y, 1.0, 0.25);
     engine.deposit(p.x, p.y, pigment, 0.95, 0.08);
     lastPaint.current = p;
     lastPointerWave.current = engine.time;
@@ -803,13 +803,13 @@ export default function Cymatics() {
       if (distance > 0.004) {
         engine.deposit(p.x, p.y, pigment, clamp(distance * 24, 0.12, 0.72), 0.052);
         if (distance > 0.014 && engine.time - lastPointerWave.current > 0.07) {
-          engine.addWave(p.x, p.y, clamp(distance * 15, 0.18, 0.72), engine.audioPitch);
+          engine.addWave(p.x, p.y, clamp(distance * 15, 0.18, 0.72), 0.25);
           lastPointerWave.current = engine.time;
         }
         lastPaint.current = p;
       }
     } else if (event.pointerType === 'mouse' && distance > 0.012 && engine.time - lastPointerWave.current > 0.14) {
-      engine.addWave(p.x, p.y, 0.23, engine.audioPitch);
+      engine.addWave(p.x, p.y, 0.23, 0.25);
       lastPointerWave.current = engine.time;
       lastPaint.current = p;
     }
@@ -851,7 +851,7 @@ export default function Cymatics() {
     try {
       await sound.startMic(audio);
       setInputMode('mic');
-      setMessage('Microphone live. Your voice, claps and nearby sounds now disturb the water. Input is not played back.');
+      setMessage('Live sound is exciting the nearest resonant mode. Strike the surface separately or drag pigment toward the still lines. Input is not played back.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Microphone access was not available.');
     }
@@ -866,7 +866,7 @@ export default function Cymatics() {
       await sound.startFile(file, audio);
       setInputMode('file');
       setAudioName(file.name);
-      setMessage('Your audio is driving the water. Pigment is advected by the combined wave field.');
+      setMessage('Audio selects the nearest resonant mode. Cursor strikes stay as travelling ripples; pigment gathers along the still lines.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'That audio file could not be played.');
       setInputMode('idle');
