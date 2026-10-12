@@ -270,3 +270,8 @@ footer b { color: var(--dim); }
 @media (prefers-reduced-motion: reduce) {
   .hero-primary, .hero-secondary, .preview-arrow, .card { transition: none !important; }
 }
+
+.brand-button { display: block; flex: none; border: 0; padding: 0; margin: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.brand-button:hover h1 { color: #f3f6ff; }
+.brand-button:focus-visible { outline-offset: 5px; border-radius: 3px; }
+.card:focus-visible { outline: 2px solid var(--c1); outline-offset: 3px; }
