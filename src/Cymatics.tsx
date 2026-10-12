@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { MeshGradient } from '@paper-design/shaders-react';
-import { createProgram, drawFullscreen, fitCanvas, FULLSCREEN_VS } from './lib/gl';
+import { createProgram, drawFullscreen, FULLSCREEN_VS } from './lib/gl';
 import { clamp } from './lib/utils';
 
-const MAX_WAVES = 12;
+const MAX_WAVES = 10;
 const PALETTE = [
   { name: 'Lagoon', color: '#55ead9' },
   { name: 'Ultramarine', color: '#618cff' },
@@ -49,7 +49,7 @@ void main() {
   for (int i = 0; i < ${MAX_WAVES}; i++) {
     float amp = waveData[i].w;
     if (amp > 0.001) {
-      vec2 source = vec2(waveData[i].x * aspect, waveData[i].y);
+      vec2 source = vec2((waveData[i].x - 0.5) * aspect, waveData[i].y - 0.5);
       vec2 delta = p - source;
       float dist = length(delta) + 0.0001;
       float age = waveData[i].z;
@@ -180,10 +180,18 @@ class CymaticWater {
     const rect = this.canvas.getBoundingClientRect();
     this.cssWidth = Math.max(2, rect.width);
     this.cssHeight = Math.max(2, rect.height);
-    const sized = fitCanvas(this.canvas, { clientWidth: this.cssWidth, clientHeight: this.cssHeight }, 1.5);
-    this.width = sized.W;
-    this.height = sized.H;
-    this.gl.viewport(0, 0, sized.W, sized.H);
+    // Cap the render target on large/high-DPI screens. This is one fullscreen
+    // wave shader, so a predictable pixel budget matters more than native DPR.
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.18, 1560 / Math.max(this.cssWidth, this.cssHeight));
+    const W = Math.max(2, Math.round(this.cssWidth * dpr));
+    const H = Math.max(2, Math.round(this.cssHeight * dpr));
+    if (this.canvas.width !== W || this.canvas.height !== H) {
+      this.canvas.width = W;
+      this.canvas.height = H;
+    }
+    this.width = W;
+    this.height = H;
+    this.gl.viewport(0, 0, W, H);
 
     const nextW = 240;
     const nextH = clamp(Math.round(nextW * this.cssHeight / this.cssWidth), 110, 205);
@@ -343,7 +351,7 @@ class CymaticWater {
     const waveData = new Float32Array(MAX_WAVES * 4);
     const waveShape = new Float32Array(MAX_WAVES * 4);
     this.waves.forEach((w, i) => {
-      waveData.set([w.x, 1 - w.y, this.time - w.born, w.amp], i * 4);
+      waveData.set([w.x, w.y, this.time - w.born, w.amp], i * 4);
       waveShape.set([w.k, w.omega, w.phase, w.decay], i * 4);
     });
     gl.uniform4fv(this.uniforms.waveData, waveData);
@@ -720,7 +728,7 @@ export default function Cymatics() {
                 key={swatch.color}
                 type="button"
                 className={`pigment-swatch${pigment === swatch.color ? ' selected' : ''}`}
-                style={{ '--swatch': swatch.color } as React.CSSProperties}
+                style={{ '--swatch': swatch.color } as CSSProperties}
                 onClick={() => { setPigment(swatch.color); setMessage(`${swatch.name} pigment selected. Drag across the surface to release it into the current.`); }}
                 aria-label={`Select ${swatch.name} pigment`}
                 aria-pressed={pigment === swatch.color}
