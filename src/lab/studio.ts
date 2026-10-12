@@ -61,23 +61,23 @@ function buildEnvironment(pmrem: THREE.PMREMGenerator): THREE.Texture {
   // turns the vessel into white ceramic (exactly the failure the first
   // tuning pass produced). The walls are kept near-charcoal; the strips,
   // softbox and copper kickers burn bright above them and draw the rim.
-  env.add(panel(40, 40, new THREE.Color(0.16, 0.165, 0.175), [0, 12, 0], [0, 0, 0]));
+  env.add(panel(40, 40, new THREE.Color(0.095, 0.10, 0.115), [0, 12, 0], [0, 0, 0]));
 
   // overhead softbox — the long bright sweep along the rim, and the key the
   // standing figure reflects. Kept OFF the camera's axis: a mirror-smooth bowl
   // reflects whatever is overhead straight back into the lens, and at the old
   // 5.4 intensity that washed the entire crown to flat white.
-  env.add(panel(7, 4.0, new THREE.Color(2.9, 2.9, 3.0), [0, 5.4, 0.4], [0, 0, 0]));
+  env.add(panel(6.0, 3.2, new THREE.Color(2.4, 2.4, 2.55), [0.35, 5.4, -0.45], [0, 0, 0]));
   // two elongated strips → the signature longitudinal highlights on the rim.
   // These, not the ceiling, are what make the metal look polished.
-  env.add(panel(0.8, 8.5, new THREE.Color(5.6, 5.65, 5.8), [-4.5, 3.2, 0.5], [0, 0.4, 0]));
-  env.add(panel(0.6, 8.5, new THREE.Color(3.0, 3.05, 3.2), [4.5, 3.2, -0.4], [0, 0.4, 0]));
+  env.add(panel(0.95, 8.0, new THREE.Color(4.5, 4.6, 4.75), [-4.5, 3.2, 0.5], [0, 0.4, 0]));
+  env.add(panel(0.7, 8.0, new THREE.Color(2.5, 2.6, 2.8), [4.5, 3.2, -0.4], [0, 0.4, 0]));
   // a third, dimmer strip on the near side completes the ring of highlights
   env.add(panel(0.7, 7, new THREE.Color(2.4, 2.45, 2.6), [1.6, 3.6, 5.4], [0, 0.4, 0]));
   // warm copper kickers low on the far and near side — the rose/copper bands
   // wrapping the outer wall in the reference
-  env.add(panel(9, 1.2, new THREE.Color(3.8, 1.55, 0.62), [0, 0.5, -6.5], [0, 0.5, 0]));
-  env.add(panel(11, 0.8, new THREE.Color(3.2, 1.5, 0.8), [0, 0.35, 5.8], [0, 0.4, 0]));
+  env.add(panel(9, 1.0, new THREE.Color(2.9, 1.25, 0.52), [0, 0.5, -6.5], [0, 0.5, 0]));
+  env.add(panel(11, 0.7, new THREE.Color(2.6, 1.25, 0.7), [0, 0.35, 5.8], [0, 0.4, 0]));
   // cool counterpoint strip so the rim carries both warm and cool streaks
   env.add(panel(4.5, 0.7, new THREE.Color(1.2, 1.7, 3.0), [-3.2, 0.45, -5.2], [0, 0.4, 0]));
   // floor bounce: mid-grey — bright enough that downward tilts still read as
@@ -162,11 +162,11 @@ export class Studio {
       preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.65));
     this.renderer.toneMapping = THREE.NeutralToneMapping ?? THREE.ACESFilmicToneMapping;
     // The set is bright; a slightly higher exposure gives the polished steel
     // its headroom to catch the HDR instruments instead of sitting in shadow.
-    this.renderer.toneMappingExposure = 0.95;
+    this.renderer.toneMappingExposure = 0.88;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.setClearColor(0xf4f4f2, 1);
 
@@ -251,8 +251,8 @@ export class Studio {
     const tan = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
     const projHalfW = 1.10;   // dish half-width + a little breathing room
     const projHalfH = 0.99;   // foreshortened half-height + rim
-    const wFrac = aspect >= 1.2 ? 0.62 : aspect >= 0.9 ? 0.78 : 0.9;
-    const vFrac = 0.8;
+    const wFrac = aspect >= 1.2 ? 0.70 : aspect >= 0.9 ? 0.82 : 0.9;
+    const vFrac = 0.84;
     const dW = projHalfW / (wFrac * tan * aspect);
     const dH = projHalfH / (vFrac * tan);
     const d = Math.max(dW, dH);
