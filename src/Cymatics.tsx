@@ -70,19 +70,25 @@ void main() {
     }
   }
 
-  // Incoming sound drives a standing-wave pattern across the surface.
-  // Pitch shifts the spatial mode; loudness controls its contrast.
-  float modeK = 15.0 + audioPitch * 38.0;
-  float soundA = sin(p.x * modeK + time * (1.6 + audioPitch * 9.0));
-  float soundB = sin(p.y * modeK * 0.79 - time * (1.55 + audioPitch * 8.4));
-  float standing = soundA * soundB;
-  float soundField = standing * audioLevel * 1.6;
+  // Sound excites a cymatics-like plate mode: radial nodes are bent by an
+  // angular harmonic. Loudness animates the mode; pitch changes ring density
+  // and the number of lobes, so audio changes the geometry rather than just
+  // scaling a visualizer.
+  float radius = length(p);
+  float theta = atan(p.y, p.x);
+  float modeN = 3.0 + floor(audioPitch * 6.0);
+  float modeK = 15.0 + audioPitch * 37.0;
+  float modeShape = radius * modeK + 0.42 * cos(theta * modeN);
+  float temporal = cos(time * (1.25 + audioPitch * 8.0));
+  float standing = sin(modeShape) * temporal;
+  float soundField = standing * audioLevel * 1.7;
   field += soundField;
 
-  vec2 normalGrad = grad + audioLevel * vec2(
-    cos(p.x * modeK + time * 1.6) * soundB * modeK,
-    soundA * cos(p.y * modeK * 0.79 - time * 1.55) * modeK * 0.79
-  ) * 0.22;
+  vec2 radialDir = p / max(radius, 0.025);
+  vec2 tangentDir = vec2(-radialDir.y, radialDir.x);
+  float radialSlope = modeK * cos(modeShape) * temporal;
+  float angularSlope = -0.42 * modeN * sin(theta * modeN) * cos(modeShape) * temporal / max(radius, 0.08);
+  vec2 normalGrad = grad + audioLevel * (radialDir * radialSlope + tangentDir * angularSlope) * 0.16;
 
   // Refract the accumulated pigment through the moving surface normal.
   vec2 displacement = clamp(normalGrad * 0.00125, vec2(-0.025), vec2(0.025));
