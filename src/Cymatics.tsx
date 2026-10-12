@@ -3,7 +3,7 @@ import { MeshGradient } from '@paper-design/shaders-react';
 import { createProgram, drawFullscreen, FULLSCREEN_VS } from './lib/gl';
 import { clamp } from './lib/utils';
 
-const MAX_WAVES = 10;
+const MAX_WAVES = 6;
 const PALETTE = [
   { name: 'Lagoon', color: '#55ead9' },
   { name: 'Ultramarine', color: '#618cff' },
@@ -634,6 +634,7 @@ export default function Cymatics() {
         sound.stopCurrent();
         setInputMode('idle');
       } else {
+        setInputMode('idle');
         await sound.startTone(frequency, audio);
         setInputMode('tone');
         setMessage('The tone is driving standing waves. Change its frequency to reshape the pattern.');
@@ -648,6 +649,7 @@ export default function Cymatics() {
     if (!sound || !audio) return;
     setError('');
     if (inputMode === 'mic') { stopAudio(); return; }
+    setInputMode('idle');
     try {
       await sound.startMic(audio);
       setInputMode('mic');
@@ -661,6 +663,7 @@ export default function Cymatics() {
     const sound = soundRef.current, audio = audioElRef.current;
     if (!file || !sound || !audio) return;
     setError('');
+    setInputMode('idle');
     try {
       await sound.startFile(file, audio);
       setInputMode('file');
