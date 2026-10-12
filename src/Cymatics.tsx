@@ -292,6 +292,8 @@ class CymaticWater {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
     this.resize();
+    this.modeCanvas.width = this.dyeWidth;
+    this.modeCanvas.height = this.dyeHeight;
     this.updateModeField(this.modeInputHz, true);
   }
 
