@@ -130,21 +130,21 @@ export function createLiquidMaterial(): {
     // Displacement stays within a couple of mesh ring-spacings (past that the
     // surface folds and renders as hard wedges). Real cymatic relief is
     // millimetres deep; the figure is read from reflection and pigment.
-    uAmp: { value: 0.042 },
+    uAmp: { value: 0.030 },
     // Optical normal gain lifts the shading slope to a legible level without
     // tipping the surface past vertical. With the studio's vertical gradient
     // this is where a crest reads as a bright swell and a trough as soft shade;
     // much higher and the same relief turns to hard chrome.
-    uNormalGain: { value: 8.5 },
+    uNormalGain: { value: 5.6 },
     // Clear shallow water over polished steel. Too dark a body and the liquid
     // reads as an opaque tinted disc; too white and it clips under the studio.
     // This sits just below the steel floor so pigment and caustics read.
-    uWater: { value: new THREE.Vector3(0.62, 0.70, 0.78) },
-    uCaustics: { value: 1 },
+    uWater: { value: new THREE.Vector3(0.78, 0.84, 0.90) },
+    uCaustics: { value: 0.55 },
     uCausticK: { value: 3.6e-7 },
     uDepth: { value: 1 },
     uNodal: { value: 0 },
-    uRefract: { value: 0.006 },
+    uRefract: { value: 0.0035 },
     // (absorbance scale, mass scale) for Beer–Lambert absorption. `mass` is now
     // the OPTICAL PATH LENGTH multiplier for pigment suspended in the water —
     // the colour is no longer painted on the surface, it is light that made it
@@ -177,7 +177,7 @@ export function createLiquidMaterial(): {
     // samples the refracted image unfiltered and every ripple facet resolves
     // into a hard radial spoke. A small value dissolves that tessellation
     // while leaving the surface reflection itself sharp.
-    roughness: 0.075,
+    roughness: 0.12,
     metalness: 0,
     envMapIntensity: 1.0,
     specularIntensity: 1.0,
@@ -245,7 +245,7 @@ varying float vH;`,
   float n0 = vnoise(luv * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
   float nx = vnoise((luv + vec2(epsN, 0.0)) * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
   float ny = vnoise((luv + vec2(0.0, epsN)) * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
-  slope += vec2(nx - n0, ny - n0) / epsN * uMicro * 0.004;
+  slope += vec2(nx - n0, ny - n0) / epsN * uMicro * 0.002;
 
   vec3 nObj = normalize(vec3(-slope.x, 1.0, -slope.y));
   // meniscus: the surface leans inward where it climbs the basin wall
@@ -268,9 +268,11 @@ vec2 dyeUv = clamp(luvC + vec2(0.0), vec2(0.001), vec2(0.999));
   float hD = texture2D(uField, luvC - vec2(0.0, uTexel.y)).r;
   float hU = texture2D(uField, luvC + vec2(0.0, uTexel.y)).r;
   vec2 g = vec2(hR - hL, hU - hD) * 0.5 / uTexel.x;
-  // clamp the refraction offset: an unbounded shift on a steep crest samples
-  // across the ink and produces rainbow speckle
-  g = clamp(g, vec2(-0.8), vec2(0.8));
+  // Refraction must remain sub-texel-to-few-texel at this scale. Strong
+  // normal gain times a large UV shift samples across adjacent color pools
+  // and reveals the transmission buffer as hard pale shards. Preserve the
+  // physical water thickness; soften only this screen-space pigment offset.
+  g = clamp(g, vec2(-0.45), vec2(0.45));
   dyeUv = clamp(luvC - g * uRefract, vec2(0.001), vec2(0.999));
 }
 vec4 dyeS = texture2D(uDye, dyeUv);
