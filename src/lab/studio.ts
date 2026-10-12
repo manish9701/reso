@@ -64,13 +64,16 @@ function buildEnvironment(pmrem: THREE.PMREMGenerator): THREE.Texture {
   env.add(panel(40, 40, new THREE.Color(0.16, 0.165, 0.175), [0, 12, 0], [0, 0, 0]));
 
   // overhead softbox — the long bright sweep along the rim, and the key the
-  // standing figure reflects
-  env.add(panel(9, 5.5, new THREE.Color(5.4, 5.4, 5.5), [0, 5.0, 1.2], [0, 0, 0]));
-  // two elongated strips → the signature longitudinal highlights on the rim
-  env.add(panel(0.8, 8.5, new THREE.Color(5.2, 5.25, 5.4), [-4.5, 3.2, 0.5], [0, 0.4, 0]));
-  env.add(panel(0.6, 8.5, new THREE.Color(2.6, 2.65, 2.8), [4.5, 3.2, -0.4], [0, 0.4, 0]));
+  // standing figure reflects. Kept OFF the camera's axis: a mirror-smooth bowl
+  // reflects whatever is overhead straight back into the lens, and at the old
+  // 5.4 intensity that washed the entire crown to flat white.
+  env.add(panel(7, 4.0, new THREE.Color(2.9, 2.9, 3.0), [0, 5.4, 0.4], [0, 0, 0]));
+  // two elongated strips → the signature longitudinal highlights on the rim.
+  // These, not the ceiling, are what make the metal look polished.
+  env.add(panel(0.8, 8.5, new THREE.Color(5.6, 5.65, 5.8), [-4.5, 3.2, 0.5], [0, 0.4, 0]));
+  env.add(panel(0.6, 8.5, new THREE.Color(3.0, 3.05, 3.2), [4.5, 3.2, -0.4], [0, 0.4, 0]));
   // a third, dimmer strip on the near side completes the ring of highlights
-  env.add(panel(0.7, 7, new THREE.Color(3.0, 3.05, 3.2), [1.6, 3.6, 5.4], [0, 0.4, 0]));
+  env.add(panel(0.7, 7, new THREE.Color(2.4, 2.45, 2.6), [1.6, 3.6, 5.4], [0, 0.4, 0]));
   // warm copper kickers low on the far and near side — the rose/copper bands
   // wrapping the outer wall in the reference
   env.add(panel(9, 1.2, new THREE.Color(3.8, 1.55, 0.62), [0, 0.5, -6.5], [0, 0.5, 0]));

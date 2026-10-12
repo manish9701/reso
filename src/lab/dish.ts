@@ -19,25 +19,28 @@ export const DISH_R = 1.0;
  */
 const PROFILE: Array<[number, number]> = [
   [0.000, 0.000],
-  [0.760, 0.000],
-  [0.900, 0.006],
-  [0.958, 0.030],
-  [0.988, 0.068],
-  [1.000, 0.112],
-  [1.000, 0.148],
-  [0.996, 0.170],
-  [0.984, 0.184],
-  [0.966, 0.190], // crown — outer half
-  [0.949, 0.187], // crown — inner half (thin: 0.017 across)
-  [0.936, 0.176],
-  [0.928, 0.158],
-  [0.922, 0.128],
-  [0.914, 0.098],
-  [0.900, 0.078],
-  [0.876, 0.068],
-  [0.820, 0.062],
-  [0.400, 0.058],
-  [0.000, 0.056],
+  [0.790, 0.000],
+  [0.910, 0.004],
+  [0.958, 0.022],
+  [0.986, 0.050],
+  [0.997, 0.082],
+  [1.000, 0.108],
+  [0.998, 0.126],
+  [0.991, 0.140],
+  [0.979, 0.147], // crown — outer edge
+  [0.970, 0.148], // crown — top
+  [0.963, 0.146], // crown — inner edge (0.016 across: a thin pressed plate)
+  [0.956, 0.138],
+  [0.949, 0.122],
+  [0.941, 0.100],
+  [0.931, 0.076],
+  [0.919, 0.056],
+  [0.906, 0.042],
+  [0.894, 0.032],
+  [0.878, 0.026],
+  [0.850, 0.023],
+  [0.600, 0.020],
+  [0.000, 0.019], // inner floor centre — the pool sits above this
 ];
 
 /** Chaikin corner-cutting: rounds transitions into small machined bevels. */
@@ -76,20 +79,18 @@ export function createDishGeometry(segments = 256): THREE.BufferGeometry {
  */
 export function createDishMaterial(): THREE.MeshPhysicalMaterial {
   const mat = new THREE.MeshPhysicalMaterial({
-    // Polished stainless, as in the reference render: bright silver body with
-    // dark contrast in the reflections. The warmth comes from the copper
-    // kickers in the studio env, not from the metal tint itself.
-    color: new THREE.Color(0.78, 0.78, 0.80),
+    // Polished stainless, as in the reference render: a mirror that carries
+    // bright silver bands, dark reflected contrast and warm copper streaks.
+    // The warmth comes from the studio's copper kickers, not from the tint.
+    color: new THREE.Color(0.86, 0.86, 0.88),
     metalness: 1,
-    // Low roughness is what lets the studio's strip lights draw long, sharp
-    // highlights down the wall; anisotropy stretches them circumferentially
-    // so it reads as a spun/polished dish rather than a chrome ball.
-    roughness: 0.16,
-    anisotropy: 0.45,
+    // True mirror roughness. At 0.16 the wall still scattered the strip lights
+    // into a soft grey haze and read as satin; below ~0.08 the lathe reflects
+    // the environment sharply and the dish looks pressed and polished.
+    roughness: 0.07,
+    anisotropy: 0.35,
     anisotropyRotation: Math.PI / 2,
-    clearcoat: 0.5,
-    clearcoatRoughness: 0.12,
-    envMapIntensity: 1.35,
+    envMapIntensity: 1.5,
     side: THREE.FrontSide,
   });
   return mat;

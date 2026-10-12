@@ -12,10 +12,19 @@
 import * as THREE from 'three';
 
 /** Liquid radius (world units) — sits just inside the dish inner wall. */
-export const LIQUID_R = 0.862;
-/** Rest surface height (world units) inside the basin. The dish's inner floor
- *  sits at y ≈ 0.067 (see dish.ts PROFILE); the liquid rests just above it. */
-export const LIQUID_Y = 0.068;
+export const LIQUID_R = 0.870;
+/** Rest surface height (world units). The dish's inner floor sits at y ≈ 0.020
+ *  (see dish.ts PROFILE), so the pool is ~0.075 deep — a real volume of water
+ *  with room for the refracted bowl to bend inside it. */
+export const LIQUID_Y = 0.094;
+/**
+ * Optically-relevant depth of the pool. This is NOT cosmetic: the refraction
+ * model displaces a ray laterally by roughly thickness·(1 − 1/ior), so a value
+ * much larger than the actual water column throws the refracted ray clean out
+ * of the vessel and it samples the white studio floor instead — which is what
+ * produced hard-edged white polygons floating on the surface.
+ */
+export const LIQUID_THICKNESS = 0.055;
 
 export interface LiquidUniforms {
   uField: { value: THREE.Texture | null };  // r = height, g = nodal shape, b = velocity
@@ -130,18 +139,19 @@ export function createLiquidMaterial(): {
     // Clear shallow water over polished steel. Too dark a body and the liquid
     // reads as an opaque tinted disc; too white and it clips under the studio.
     // This sits just below the steel floor so pigment and caustics read.
-    uWater: { value: new THREE.Vector3(0.48, 0.56, 0.66) },
+    uWater: { value: new THREE.Vector3(0.62, 0.70, 0.78) },
     uCaustics: { value: 1 },
     uCausticK: { value: 3.6e-7 },
     uDepth: { value: 1 },
     uNodal: { value: 0 },
     uRefract: { value: 0.006 },
-    // (absorbance scale, mass scale) for Beer–Lambert transmission. The mass
-    // scale drives `cover`, which is what suppresses specular over dense
-    // pigment. The absorbance scale is kept below 1 so ink stays luminous and
-    // saturated — full-strength density drives transmission to black and the
-    // colour dies into mud long before the mass builds to a real pour.
-    uInkDensity: { value: new THREE.Vector2(0.85, 2.2) },
+    // (absorbance scale, mass scale) for Beer–Lambert absorption. `mass` is now
+    // the OPTICAL PATH LENGTH multiplier for pigment suspended in the water —
+    // the colour is no longer painted on the surface, it is light that made it
+    // through the liquid. Absorbance scale is kept below 1 so a pour stays
+    // luminous; full-strength density saturates to black long before a real
+    // volume of dye would.
+    uInkDensity: { value: new THREE.Vector2(1.35, 2.6) },
     uTime: { value: 0 },
     uMicro: { value: 0.020 },
     uDebug: { value: 0 },
@@ -149,19 +159,27 @@ export function createLiquidMaterial(): {
 
   const material = new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
-    // Water is glossy — that sharp specular sweep IS how the figure reads.
-    // Clearer water: tighter roughness for a harder, more mirror-like fist
-    // of reflections, with the studio supplying the light and shade.
-    roughness: 0.14,
+    // Real TRANSMISSION, not a tinted opaque disc. Water is a dielectric: light
+    // enters, travels through the liquid, picks up the pigment suspended in it
+    // and exits. Refraction (ior 1.33) is what bends the polished steel bowl
+    // seen through the surface — the single strongest "this is water" cue, and
+    // the one an opaque surface can never produce.
+    transmission: 1,
+    thickness: LIQUID_THICKNESS,
+    ior: 1.333,
+    // Water itself is nearly colourless; this is the faint cool cast over a
+    // long path, not the colour of the liquid.
+    attenuationColor: new THREE.Color(0.82, 0.90, 0.96),
+    attenuationDistance: 2.2,
+    // Near-mirror surface so the studio's strips read as sharp highlights.
+    // Not purely a look knob: three.js picks the mip level for the
+    // transmission buffer FROM this roughness, so a perfectly smooth surface
+    // samples the refracted image unfiltered and every ripple facet resolves
+    // into a hard radial spoke. A small value dissolves that tessellation
+    // while leaving the surface reflection itself sharp.
+    roughness: 0.075,
     metalness: 0,
-    clearcoat: 0.45,
-    clearcoatRoughness: 0.14,
-    // Glossy, because a glossy surface is what turns the studio's vertical
-    // brightness gradient into visible light-and-shade across the ripples.
-    // Kept BELOW the dish's intensity: a water-thin Fresnel layer should show
-    // the dark studio between highlights, not mirror the whole room (that is
-    // what washed the surface to milk in the first tuning pass).
-    envMapIntensity: 0.75,
+    envMapIntensity: 1.0,
     specularIntensity: 1.0,
     side: THREE.FrontSide,
   });
@@ -256,45 +274,42 @@ vec2 dyeUv = clamp(luvC + vec2(0.0), vec2(0.001), vec2(0.999));
   dyeUv = clamp(luvC - g * uRefract, vec2(0.001), vec2(0.999));
 }
 vec4 dyeS = texture2D(uDye, dyeUv);
-// Beer–Lambert: the light reaching the eye is attenuated exponentially by the
-// pigment's optical density. Because absorbance accumulates additively in the
-// sim, this reproduces real subtractive pigment mixing for free — blue ink
-// over yellow ink transmits blue·green, i.e. green, not grey.
-vec3 trans = exp(-dyeS.rgb * uInkDensity.x);
+// Beer–Lambert absorption for pigment SUSPENDED IN THE WATER.
+//
+// The difference that matters: this is applied to the light that has already
+// travelled THROUGH the liquid (below, after the transmission chunk), not to
+// the surface's own colour. Colouring diffuseColor instead is what made the
+// ink look like paint floating on top — it ignored the refracted bowl behind
+// the surface entirely. Multiplying the transmitted radiance means the dye
+// tints whatever is behind the water exactly as a real volume of ink would,
+// and because absorbance accumulates additively, blue over yellow still
+// transmits blue·green = green.
+vec3 dyeAbsorb = exp(-dyeS.rgb * uInkDensity.x);
+// Resurrect chroma: at depth every channel tends to saturate and the hue
+// slides to neutral. Pulling transmission toward its strongest channel keeps
+// a poured colour luminous instead of muddy.
+dyeAbsorb += maxComp(dyeAbsorb) * 0.20 * (vec3(1.0) - dyeAbsorb);
+// How much liquid the eye is looking through here — a standing swell of dye
+// is a longer optical path than a clear trough, so it reads as denser.
+// The height is sampled from the field texture rather than taken from the
+// varying: vH is interpolated across the polar mesh, so using it here makes
+// the path length step ring by ring and the dye bands visibly along the
+// tessellation. Texture sampling is smooth everywhere.
+float pathLen = 1.0 + clamp(texture2D(uField, luvC).r, -1.0, 1.0) * 0.30 * uDepth;
+dyeAbsorb = pow(dyeAbsorb, vec3(pathLen));
 float cover = 1.0 - exp(-dyeS.a * uInkDensity.y);
-// Resurrect chroma: dense pigment slides toward neutral grey because every
-// channel eventually saturates. Pulling transmission toward its strongest
-// channel keeps the poured hue luminous at depth, like real ink viewed
-// against a bright metal bowl.
-trans += maxComp(trans) * 0.20 * (vec3(1.0) - trans);
-vec3 waterCol = uWater;
-// depth tint: cooler and slightly deeper under the pigment (guide §6.4) —
-// kept gentle, too much here and the water reads as opaque paint instead
-// of a transparent film over steel.
-waterCol = mix(waterCol, vec3(0.58, 0.68, 0.80), uDepth * 0.22);
-waterCol *= 1.0 - clamp(-vH, 0.0, 1.0) * 0.14 * uDepth;
 // suspended micro-bubbles: a faint animated glitter inside dense pigment,
-// the way a real ink pour holds countless tiny air bells that catch light
+// the way a real pour holds countless tiny air bells that catch the light
 float sparkleSrc = vnoise(luvC * 240.0 + vec2(uTime * 1.6, -uTime * 1.1));
 float sparkle = smoothstep(0.80, 0.98, sparkleSrc) * cover * 0.10;
-diffuseColor.rgb = waterCol * trans + vec3(sparkle);`,
-      )
-      // ---- ink sits slightly rougher than clear water -------------------
-      .replace(
-        '#include <roughnessmap_fragment>',
-        /* glsl */ `#include <roughnessmap_fragment>
-roughnessFactor = mix(roughnessFactor, 0.38, cover);`,
-      )
-      // wet pigment is a matte film: killing its specular is what lets the
-      // colour read instead of being washed white by the studio reflection
-      .replace(
-        '#include <lights_physical_fragment>',
-        /* glsl */ `#include <lights_physical_fragment>
-#ifdef USE_SPECULAR
-    // denser pigment loses specular, but not all of it — a wet ink film is
-    // still glossy, and that sheen is part of what keeps colour saturated
-    material.specularColor = mix(material.specularColor, vec3(0.10), cover);
-#endif`,
+// Light scattered back OUT of the water by the pigment itself. Its colour is
+// the dye's own transmitted hue, so a red pour scatters red — this is what
+// keeps a colour readable even over a dark part of the bowl, and it is what
+// makes the ink feel suspended IN something rather than painted ON it.
+vec3 dyeScatter = dyeAbsorb * cover;
+// The surface's own body is nearly colourless — with transmission on, this is
+// only the small diffuse remainder, not the visible colour of the liquid.
+diffuseColor.rgb = uWater;`,
       )
       // ---- caustics + nodal diagnostic ----------------------------------
       .replace(
@@ -330,6 +345,22 @@ roughnessFactor = mix(roughnessFactor, 0.38, cover);`,
   totalEmissiveRadiance += vec3(0.16, 0.42, 0.85) * node * uNodal * 0.55;
 }`,
       )
+      // ---- the pigment lives INSIDE the water -------------------------
+      // This runs after three.js has refracted the scene through the surface
+      // (transmission_fragment), so `totalDiffuse` is the light that actually
+      // travelled through the liquid. Attenuating it by the dye is what makes
+      // colour behave like ink in water instead of paint on top: the steel bowl
+      // stays visible through the pour, bent by the ripples, and the dye only
+      // changes the colour of the light coming back out.
+      .replace(
+        '#include <transmission_fragment>',
+        /* glsl */ `#include <transmission_fragment>
+totalDiffuse *= dyeAbsorb;
+// A dense pour also scatters light back out of the liquid, which is why real
+// ink in water is luminous rather than a flat cutout — and why a drop of
+// colour is still readable where the refracted bowl behind it is dark.
+totalDiffuse += dyeScatter * uWater * 1.4;`,
+      )
       // ---- raw-field debug views (?debug=dye|mode|h) ---------------------
       .replace(
         '#include <dithering_fragment>',
@@ -364,6 +395,7 @@ if (uDebug > 0.5) {
       ['uniform sampler2D uField;', f],
       ['slope = gradUv', f],
       ['exp(-dyeS.rgb', f],
+      ['totalDiffuse *= dyeAbsorb', f],
       ['uDebug > 0.5', f],
     ] as const) {
       if (!where.includes(marker)) {

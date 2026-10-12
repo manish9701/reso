@@ -203,8 +203,8 @@ export class LabEngine {
     this.pigment.enqueue({
       x: p.x,
       y: p.y,
-      radius: radius * (0.4 + this.sim.spread * 1.4),
-      amount: amount * (0.25 + this.sim.amount * 1.3),
+      radius: radius * (0.75 + this.sim.spread * 1.9),
+      amount: amount * (0.2 + this.sim.amount * 0.85),
       absorbance: inkAbsorbance(color, 1.0),
     });
   }
@@ -303,7 +303,7 @@ export class LabEngine {
       flow: 0.014,
       swirl: 0.026,
       stir,
-      sharpen: 0.12,
+      sharpen: 0.22,
       time: this.time,
     }, this.fieldTarget.texture);
 
@@ -339,15 +339,18 @@ export class LabEngine {
   dyeStats(): { cells: number; mass: number } {
     const rt = (this.pigment as unknown as { targets: THREE.WebGLRenderTarget[]; idx: number });
     const target = rt.targets[rt.idx];
-    const buf = new Uint8Array(DYE_SIZE * DYE_SIZE * 4);
+    // The dye targets are HalfFloatType. Reading them into a Uint8Array returns
+    // garbage (the driver reinterprets the float bits as bytes), so a Uint8
+    // probe silently reports ~zero mass and looks exactly like "no pigment".
+    const buf = new Float32Array(DYE_SIZE * DYE_SIZE * 4);
     this.studio.renderer.readRenderTargetPixels(target, 0, 0, DYE_SIZE, DYE_SIZE, buf);
     let cells = 0;
     let total = 0;
     for (let i = 0; i < DYE_SIZE * DYE_SIZE; i++) {
       const a = buf[i * 4 + 3];
-      if (a > 12) { cells++; total += a; }
+      if (a > 0.05) { cells++; total += a; }
     }
-    return { cells, mass: total / (255 * DYE_SIZE * DYE_SIZE) };
+    return { cells, mass: total / (DYE_SIZE * DYE_SIZE) };
   }
 
   /** Nodal diagram of the resolved mode (preset thumbnails) — §18. */
