@@ -6,17 +6,31 @@
  *   node scripts/verify.mjs http://localhost:5173/
  */
 import puppeteer from 'puppeteer-core';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const DEFAULT_CHROME = process.platform === 'win32'
+  ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+  : '/usr/bin/google-chrome';
+const CHROME = process.env.CHROME_PATH || DEFAULT_CHROME;
 const URL = process.argv[2] ?? 'http://localhost:5173/';
-const OUT = 'C:\\Users\\mj345\\AppData\\Local\\Temp\\opencode';
+const OUT = process.env.VISUAL_QA_OUT || path.join(os.tmpdir(), 'reso-visual-qa');
+fs.mkdirSync(OUT, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: 'new',
-  args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--hide-scrollbars'],
+  args: [
+    '--no-sandbox',
+    '--autoplay-policy=no-user-gesture-required',
+    '--hide-scrollbars',
+    ...(process.env.WEBGL_SOFTWARE_RENDERER === '1'
+      ? ['--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+      : []),
+  ],
   defaultViewport: { width: 1536, height: 1024 },
 });
 const page = await browser.newPage();
@@ -71,7 +85,7 @@ console.log('health:', JSON.stringify(health));
 if (health.fieldRange < 0.05) errors.push('SIM: height field is flat — no figure is being produced');
 if (!health.modes) errors.push('SIM: no active modes — drive level is zero');
 if (!health.liquidVisible) errors.push('RENDER: liquid is not visible');
-await page.screenshot({ path: OUT + '\\rt-1-idle.png' });
+await page.screenshot({ path: path.join(OUT, 'rt-1-idle.png') });
 
 // frame rate probe (headless runs on SwiftShader — expect low numbers there)
 const fps = await page.evaluate(() => new Promise((resolve) => {
@@ -83,7 +97,7 @@ const fps = await page.evaluate(() => new Promise((resolve) => {
 console.log('FPS:', fps.toFixed(1));
 
 await sleep(6000);
-await page.screenshot({ path: OUT + '\\rt-2-tone.png' });
+await page.screenshot({ path: path.join(OUT, 'rt-2-tone.png') });
 
 // pour pigment across the dish and let the figure organise it
 await page.evaluate(() => {
@@ -95,17 +109,22 @@ await page.evaluate(() => {
   e.deposit(0.5, 0.5, 0.05, 0.8, [0.92, 0.24, 0.55]);
 });
 await sleep(6000);
-await page.screenshot({ path: OUT + '\\rt-3-pigment.png' });
+await page.screenshot({ path: path.join(OUT, 'rt-3-pigment.png') });
 
-// sweep frequency — the figure must reorganise, with cell count rising
-for (const hz of [1.9, 4.5, 8.5]) {
+// sweep frequency — the figure must reorganise, with cell count rising.
+// Real Hz: these are actual resonances of the vessel, not a mapped UI band.
+const modeSignatures = new Set();
+for (const hz of [1.7, 2.4, 3.4, 4.5, 5.8, 8.4]) {
   await page.evaluate((f) => { window.__lab.forcedDrive = { freq: f, level: 0.85 }; }, hz);
   await sleep(3000);
   const m = await page.evaluate(() => window.__lab.figure.slots.map((s) => `m${s.m}@${s.kR.toFixed(1)}`).join(','));
   console.log(`${hz} Hz -> ${m}`);
-  await page.screenshot({ path: `${OUT}\\rt-4-swept-${hz}.png` });
+  modeSignatures.add(m);
+  await page.screenshot({ path: path.join(OUT, `rt-4-swept-${hz}.png`) });
 }
+if (modeSignatures.size < 3) errors.push('SIM: frequency sweep did not produce enough distinct modal patterns');
 
+console.log('SCREENSHOTS:', OUT);
 console.log('ERRORS:', errors.length ? errors.slice(0, 6) : 'none');
 await browser.close();
 process.exit(errors.length ? 1 : 0);
