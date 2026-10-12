@@ -1,9 +1,8 @@
+import { createRoot } from 'react-dom/client';
 import App from './App';
 import './styles.css';
 
-// NOTE: no React.StrictMode on purpose — toy engines own WebGL contexts and
-// rAF loops, and StrictMode's effect double-invoke would lose/recreate GPU
-// contexts pointlessly in dev.
-import { createRoot } from 'react-dom/client';
-
+// NOTE: no React.StrictMode — the cymatics engine owns a WebGL2 context,
+// ping-pong FBOs and an AudioContext; StrictMode's effect double-invoke
+// tears down and rebuilds those pointlessly in dev.
 createRoot(document.getElementById('root')!).render(<App />);

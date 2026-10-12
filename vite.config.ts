@@ -6,4 +6,5 @@ export default defineConfig({
   // Repository is served from manish9701.github.io/reso/ on GitHub Pages.
   base: '/reso/',
   server: { port: 5173 },
+  preview: { port: 4173 },
 });
