@@ -47,17 +47,23 @@ function modeNearestTo(frequencyHz: number): ResonantMode {
   return best;
 }
 
+function poly(y: number, coefficients: number[]): number {
+  let out = coefficients[coefficients.length - 1];
+  for (let i = coefficients.length - 2; i >= 0; i--) out = coefficients[i] + y * out;
+  return out;
+}
+
 function besselJ0(x: number): number {
   const ax = Math.abs(x);
   if (ax < 8) {
     const y = x * x;
-    const a = 57568490574 + y * (-13362590354 + y * (651619640.7 + y * (-11214424.18 + y * (77392.33017 + y * (-184.9052456))));
-    const b = 57568490411 + y * (1029532985 + y * (9494680.718 + y * (59272.64853 + y * (267.8532712 + y)));
+    const a = poly(y, [57568490574, -13362590354, 651619640.7, -11214424.18, 77392.33017, -184.9052456]);
+    const b = poly(y, [57568490411, 1029532985, 9494680.718, 59272.64853, 267.8532712, 1]);
     return a / b;
   }
   const z = 8 / ax, y = z * z, xx = ax - 0.785398164;
-  const a = 1 + y * (-0.001098628627 + y * (0.00002734510407 + y * (-0.000002073370639 + y * 0.0000002093887211));
-  const b = -0.01562499995 + y * (0.0001430488765 + y * (-0.000006911147651 + y * (0.0000007621095161 - y * 0.0000000934945152));
+  const a = poly(y, [1, -0.001098628627, 0.00002734510407, -0.000002073370639, 0.0000002093887211]);
+  const b = poly(y, [-0.01562499995, 0.0001430488765, -0.000006911147651, 0.0000007621095161, -0.0000000934945152]);
   return Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * a - z * Math.sin(xx) * b);
 }
 
@@ -65,13 +71,13 @@ function besselJ1(x: number): number {
   const ax = Math.abs(x);
   if (ax < 8) {
     const y = x * x;
-    const a = x * (72362614232 + y * (-7895059235 + y * (242396853.1 + y * (-2972611.439 + y * (15704.48260 + y * (-30.16036606)))));
-    const b = 144725228442 + y * (2300535178 + y * (18583304.74 + y * (99447.43394 + y * (376.9991397 + y)));
+    const a = x * poly(y, [72362614232, -7895059235, 242396853.1, -2972611.439, 15704.48260, -30.16036606]);
+    const b = poly(y, [144725228442, 2300535178, 18583304.74, 99447.43394, 376.9991397, 1]);
     return a / b;
   }
   const z = 8 / ax, y = z * z, xx = ax - 2.356194491;
-  const a = 1 + y * (0.00183105 + y * (-0.00003516396496 + y * (0.000002457520174 + y * (-0.000000240337019)));
-  const b = 0.04687499995 + y * (-0.0002002690873 + y * (0.000008449199096 + y * (-0.00000088228987 + y * 0.000000105787412));
+  const a = poly(y, [1, 0.00183105, -0.00003516396496, 0.000002457520174, -0.000000240337019]);
+  const b = poly(y, [0.04687499995, -0.0002002690873, 0.000008449199096, -0.00000088228987, 0.000000105787412]);
   const ans = Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * a - z * Math.sin(xx) * b);
   return x < 0 ? -ans : ans;
 }
@@ -99,7 +105,6 @@ function besselJ(order: number, x: number): number {
   }
   return current;
 }
-type InputMode = 'idle' | 'tone' | 'mic' | 'file';
 
 const WATER_FRAGMENT = `
 precision highp float;
@@ -107,6 +112,7 @@ uniform vec2 res;
 uniform float time;
 uniform sampler2D dyeTex;
 uniform sampler2D modeTex;
+uniform vec2 modeRes;
 uniform float modeStrength;
 uniform vec4 waveData[${MAX_WAVES}];
 uniform vec4 waveShape[${MAX_WAVES}];
@@ -161,7 +167,7 @@ void main() {
   vec4 modal = texture2D(modeTex, uv);
   float modeValue = (modal.r - 0.5) * 2.0;
   float modeMask = modal.a;
-  vec2 texel = 1.4 / res;
+  vec2 texel = 1.0 / modeRes;
   float modeE = (texture2D(modeTex, clamp(uv + vec2(texel.x, 0.0), vec2(0.002), vec2(0.998))).r - 0.5) * 2.0;
   float modeW = (texture2D(modeTex, clamp(uv - vec2(texel.x, 0.0), vec2(0.002), vec2(0.998))).r - 0.5) * 2.0;
   float modeN = (texture2D(modeTex, clamp(uv - vec2(0.0, texel.y), vec2(0.002), vec2(0.998))).r - 0.5) * 2.0;
@@ -222,11 +228,11 @@ class CymaticWater {
   modeTexture: WebGLTexture;
   modeCanvas = document.createElement('canvas');
   modeCtx = this.modeCanvas.getContext('2d', { willReadFrequently: false })!;
-  modePixels = new Uint8ClampedArray(this.dyeWidth * this.dyeHeight * 4);
-  modeImageData = new ImageData(this.dyeWidth, this.dyeHeight);
-  modeField = new Float32Array(this.dyeWidth * this.dyeHeight);
-  modeGradX = new Float32Array(this.dyeWidth * this.dyeHeight);
-  modeGradY = new Float32Array(this.dyeWidth * this.dyeHeight);
+  modePixels = new Uint8ClampedArray(200 * 120 * 4);
+  modeImageData = new ImageData(200, 120);
+  modeField = new Float32Array(200 * 120);
+  modeGradX = new Float32Array(200 * 120);
+  modeGradY = new Float32Array(200 * 120);
   modeM = 0;
   modeRoot = 11.7915;
   modeNaturalHz = 269.7;
@@ -265,7 +271,7 @@ class CymaticWater {
     if (!gl) throw new Error('WebGL is unavailable in this browser.');
     this.gl = gl;
     this.program = createProgram(gl, FULLSCREEN_VS, WATER_FRAGMENT);
-    for (const name of ['res', 'time', 'dyeTex', 'modeTex', 'modeStrength', 'waveData', 'waveShape', 'audioLevel', 'audioPitch', 'pointer', 'aspect']) {
+    for (const name of ['res', 'time', 'dyeTex', 'modeTex', 'modeRes', 'modeStrength', 'waveData', 'waveShape', 'audioLevel', 'audioPitch', 'pointer', 'aspect']) {
       this.uniforms[name] = gl.getUniformLocation(this.program, name === 'waveData' || name === 'waveShape' ? name + '[0]' : name);
     }
     const tex = gl.createTexture();
@@ -286,6 +292,7 @@ class CymaticWater {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
     this.resize();
+    this.updateModeField(this.modeInputHz, true);
   }
 
   resize() {
@@ -338,7 +345,14 @@ class CymaticWater {
 
   updateModeField(frequencyHz: number, force = false) {
     const hz = clamp(frequencyHz, MODE_BANK[0].hz, MODE_BANK[MODE_BANK.length - 1].hz);
-    const next = modeNearestTo(hz);
+    let next = modeNearestTo(hz);
+    if (!force && this.modeKey && (next.m !== this.modeM || next.root !== this.modeRoot)) {
+      const nextDistance = Math.abs(Math.log(Math.max(1, hz) / next.hz));
+      const currentDistance = Math.abs(Math.log(Math.max(1, hz) / this.modeNaturalHz));
+      if (nextDistance > currentDistance * 0.78) {
+        next = { m: this.modeM, root: this.modeRoot, hz: this.modeNaturalHz };
+      }
+    }
     const key = `${next.m}-${next.root.toFixed(3)}-${this.dyeWidth}x${this.dyeHeight}`;
     this.modeResponse = clamp(1 / (1 + Math.pow(Math.log(Math.max(1, hz) / next.hz) / 0.12, 2)), 0.10, 1);
     this.modeInputHz = hz;
@@ -526,6 +540,7 @@ class CymaticWater {
     gl.uniform1f(this.uniforms.time, this.time);
     gl.uniform1i(this.uniforms.dyeTex, 0);
     gl.uniform1i(this.uniforms.modeTex, 1);
+    gl.uniform2f(this.uniforms.modeRes, this.dyeWidth, this.dyeHeight);
     gl.uniform1f(this.uniforms.modeStrength, this.modeStrength);
     gl.activeTexture(gl.TEXTURE0);
     const waveData = new Float32Array(MAX_WAVES * 4);
