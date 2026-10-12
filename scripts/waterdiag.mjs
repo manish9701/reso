@@ -13,7 +13,7 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)));
-await page.goto(URL + '?drive=432&level=0.9', { waitUntil: 'networkidle0' });
+await page.goto(URL + '?drive=4.5&level=0.9', { waitUntil: 'networkidle0' });
 await sleep(2000);
 await sleep(4000);
 await page.evaluate(() => {

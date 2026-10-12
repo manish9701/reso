@@ -94,16 +94,24 @@ export interface CymaticMode {
   freq: number;
 }
 
-/** Visual frequency range the UI drives. */
-export const FREQ_MIN = 60;
-export const FREQ_MAX = 900;
-
+/**
+ * The slider drives REAL resonance frequencies, in Hz, of the actual vessel.
+ *
+ * This used to remap the physical 0.6–7.5 Hz band logarithmically onto a fake
+ * 60–900 Hz "audible" band, which meant every frequency the UI displayed was
+ * wrong by ~100× and — worse — the whole slider spanned barely one or two real
+ * modes. Sliding it wandered between near-degenerate neighbours instead of
+ * walking the spectrum.
+ *
+ * The capillary–gravity dispersion below is honest physics; there is now no
+ * invented mapping on top of it. The visible band is derived from the mode
+ * bank itself (see BANKS below), so the slider always covers exactly the
+ * resonances the vessel actually has.
+ */
+/** Physical frequency of a mode, straight from the dispersion relation. */
 function modeFreq(k: number): number {
   const omega = Math.sqrt((G * k + (SIGMA / RHO) * k * k * k) * Math.tanh(k * VESSEL.depth));
-  const fPhys = omega / (2 * Math.PI);
-  const fMin = 0.6, fMax = 7.5;
-  const t = (Math.log(fPhys) - Math.log(fMin)) / (Math.log(fMax) - Math.log(fMin));
-  return FREQ_MIN * Math.exp(t * Math.log(FREQ_MAX / FREQ_MIN));
+  return omega / (2 * Math.PI);
 }
 
 /**
@@ -141,6 +149,15 @@ export const BANKS: Record<Boundary, CymaticMode[]> = {
 };
 
 /**
+ * The frequency range the slider should actually span: the real resonances of
+ * the default (rigid) vessel, rounded outward so the extreme modes are
+ * reachable. Derived from the bank, not hand-written, so it stays correct if
+ * the vessel geometry or the mode limits ever change.
+ */
+export const BANK_FREQ_MIN = BANKS.rigid[0].freq;
+export const BANK_FREQ_MAX = BANKS.rigid[BANKS.rigid.length - 1].freq;
+
+/**
  * Resolve the resonant response for a drive frequency against a bank:
  * nearest mode + neighbour with soft log-frequency weights (never a pop).
  */
@@ -148,15 +165,19 @@ export function resolveDrive(
   freqHz: number,
   bank: CymaticMode[],
 ): { a: CymaticMode; b: CymaticMode; wa: number; wb: number; axial: number } {
+  // Guard the log against a non-positive drive. The floor is the bank's own
+  // lowest mode, NOT a hardcoded 10 Hz — every mode on this vessel lives
+  // below 10 Hz, so that floor used to flatten the whole detuning curve.
+  const fd = Math.max(freqHz, 1e-3);
   let best = bank[0], second = bank[bank.length - 1];
   let dBest = Infinity;
   for (const md of bank) {
-    const d = Math.abs(Math.log(md.freq / Math.max(10, freqHz)));
+    const d = Math.abs(Math.log(md.freq / fd));
     if (d < dBest) { dBest = d; second = best; best = md; }
   }
   const bw = 0.35;
-  const wa = Math.exp(-Math.pow(Math.log(best.freq / Math.max(10, freqHz)) / bw, 2));
-  const wb = Math.exp(-Math.pow(Math.log(second.freq / Math.max(10, freqHz)) / bw, 2)) * 0.7;
+  const wa = Math.exp(-Math.pow(Math.log(best.freq / fd) / bw, 2));
+  const wb = Math.exp(-Math.pow(Math.log(second.freq / fd) / bw, 2)) * 0.7;
   const axial = best.m === 0 ? wa : Math.max(0, 0.25 - dBest * 0.15);
   return { a: best, b: second, wa: 0.6 + 0.4 * wa, wb: wb * 0.6, axial };
 }

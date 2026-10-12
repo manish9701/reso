@@ -24,10 +24,10 @@ page.on('console', (m) => { if (m.type() === 'error') console.log('[err]', m.tex
 
 // The ?drive hook makes each stop deterministic — audio autoplay in headless is
 // unreliable, and a silent tone silently invalidates the whole sweep.
-await page.goto(BASE + '?drive=432&level=0.85', { waitUntil: 'networkidle0' });
+await page.goto(BASE + '?drive=4.5&level=0.85', { waitUntil: 'networkidle0' });
 await sleep(3000);
 
-const STOPS = [110, 180, 280, 400, 560, 760, 900];
+const STOPS = [1.7, 2.4, 3.2, 4.5, 5.8, 7.1, 8.4];
 
 for (const f of STOPS) {
   // set the drive, wait for the resonance model to settle on the new mode

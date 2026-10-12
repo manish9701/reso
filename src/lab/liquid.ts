@@ -414,8 +414,20 @@ diffuseColor.rgb = uWater;`,
     shade = clamp(shade * 0.34 * uShadowMix, 0.0, 1.0);
     // crests are lit, troughs fall into shadow
     float shadeTerm = 1.0 - shade;
-    totalEmissiveRadiance += vec3(1.0, 0.99, 0.95) * caustic * uCaustics
-      * (1.0 - cover * 0.45) * shadeTerm;
+    // Scattering by settled pigment. On a real Chladni plate the bright nodal
+    // lines ARE the accumulated powder catching the light — the figure
+    // develops over time as pigment migrates onto the nodes, rather than
+    // appearing instantly. Weighting the caustic by how much dye has actually
+    // gathered here is what makes it develop: pour ink, wait, and the nodal
+    // filaments brighten as the powder settles into them. With no pigment
+    // present the relief still shows in the reflections, but the strong
+    // scattered light only builds where the figure has actually collected
+    // colour. That is the difference between a drawn pattern and an emergent
+    // one.
+    float powder = clamp(cover * 1.4, 0.0, 1.0);
+    vec3 lit = vec3(1.0, 0.99, 0.95) * caustic * uCaustics * shadeTerm;
+    lit += dyeAbsorb * powder * caustic * 1.6 * uCaustics * shadeTerm;
+    totalEmissiveRadiance += lit;
     // Store the shadow for the lighting stage — totalDiffuse does not exist
     // yet in this chunk, so the ambient occlusion it implies is applied after
     // transmission instead of here.

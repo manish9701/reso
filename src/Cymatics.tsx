@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LabEngine } from './lab/engine';
 import { AudioInput } from './lab/audio';
-import { FREQ_MIN, FREQ_MAX, type Boundary } from './lab/resonance';
+import { BANK_FREQ_MIN, BANK_FREQ_MAX, type Boundary } from './lab/resonance';
 import { clamp, hexToRgb } from './lib/utils';
 
 /**
@@ -14,6 +14,12 @@ import { clamp, hexToRgb } from './lib/utils';
 
 const PALETTE = ['#8a3ff2', '#2e62e8', '#35c8f0', '#f064b0', '#f5a13d', '#e9edf2'];
 const DEFAULT_INK = '#2e62e8';
+/**
+ * Default drive = a real resonance of this vessel (the 3rd radial mode,
+ * ≈4.5 Hz), not an arbitrary number. It sits in the middle of the bank so the
+ * figure has a clear multi-lobed structure the moment the page opens.
+ */
+const DEFAULT_FREQ = 4.5;
 /** Constant drive level — the slider is frequency only, per the spec. */
 const DRIVE_LEVEL = 0.85;
 
@@ -25,14 +31,14 @@ export default function Cymatics() {
   const fileRef = useRef<HTMLInputElement>(null);
   const rafRef = useRef(0);
   const pausedRef = useRef(false);            // vibration (drive) on/off
-  const freqRef = useRef(432);
+  const freqRef = useRef(DEFAULT_FREQ);
   const ampRef = useRef(0.85);
   const pointerDown = useRef(false);
   const lastPaint = useRef({ x: 0.5, y: 0.5 });
   const lastHover = useRef(0);
   const pigmentRef = useRef(DEFAULT_INK);
 
-  const [freq, setFreq] = useState(432);
+  const [freq, setFreq] = useState(DEFAULT_FREQ);
   const [amplitude] = useState(0.85);
   const [pigment, setPigment] = useState(DEFAULT_INK);
   const [paused, setPaused] = useState(false);
@@ -253,14 +259,14 @@ export default function Cymatics() {
       <div className="rail rail-left">
         <span className="rail-label">Frequency</span>
         <div className="freq-readout">
-          <strong>{Math.round(freq)}</strong> <em>Hz</em>
+          <strong>{freq.toFixed(2)}</strong> <em>Hz</em>
         </div>
         <input
           className="freq-slider"
           type="range"
-          min={FREQ_MIN}
-          max={FREQ_MAX}
-          step={1}
+          min={BANK_FREQ_MIN}
+          max={BANK_FREQ_MAX}
+          step={0.01}
           value={freq}
           onChange={(e) => setFreq(Number(e.target.value))}
           aria-label="Drive frequency"

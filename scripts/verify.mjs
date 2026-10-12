@@ -47,7 +47,7 @@ page.on('pageerror', (e) => { errors.push(String(e)); console.log('[pageerror]',
 
 // Use the deterministic drive hook: headless audio autoplay is unreliable, and
 // a tone that silently never starts makes every later assertion meaningless.
-await page.goto(URL + '?drive=420&level=0.85', { waitUntil: 'networkidle0' });
+await page.goto(URL + '?drive=4.5&level=0.85', { waitUntil: 'networkidle0' });
 await sleep(4000);
 
 // prove the water is actually on screen and actually being driven
@@ -98,7 +98,7 @@ await sleep(6000);
 await page.screenshot({ path: OUT + '\\rt-3-pigment.png' });
 
 // sweep frequency — the figure must reorganise, with cell count rising
-for (const hz of [180, 560, 900]) {
+for (const hz of [1.9, 4.5, 8.5]) {
   await page.evaluate((f) => { window.__lab.forcedDrive = { freq: f, level: 0.85 }; }, hz);
   await sleep(3000);
   const m = await page.evaluate(() => window.__lab.figure.slots.map((s) => `m${s.m}@${s.kR.toFixed(1)}`).join(','));

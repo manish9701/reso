@@ -362,7 +362,7 @@ export class LabEngine {
       // to dominate the curl transport: if the swirling flow wins, pigment
       // circulates as a soft cloud and no nodal filament ever forms, which is
       // exactly what the reference plate does not look like.
-      gather: this.gather * 0.16,
+      gather: this.gather * 4.5,
       // a small diffusion FLOOR is not cosmetic: it is what suppresses the
       // texel-level noise that advection + unsharp would otherwise amplify
       // into rainbow speckle across the whole surface

@@ -12,7 +12,7 @@
  * What is NOT claimed: the frequency→mode mapping is an illustrative
  * calibration (documented in README), not a measured property of a real dish.
  */
-import { BANKS, FREQ_MAX, FREQ_MIN, VESSEL, type Boundary, type CymaticMode } from '../lab/resonance';
+import { BANKS, BANK_FREQ_MAX, BANK_FREQ_MIN, VESSEL, type Boundary, type CymaticMode } from '../lab/resonance';
 
 export interface ModeSlot {
   /** angular order m */
@@ -56,7 +56,10 @@ export class ResonanceModel {
    * Returns the strongest modes (max 4) for the forcing pass.
    */
   update(dt: number, freqHz: number, level: number): ModeSlot[] {
-    const f = Math.min(FREQ_MAX, Math.max(FREQ_MIN, freqHz));
+    // Clamp to the vessel's REAL resonance range, derived from the bank. This was
+    // clamping to the old fake 60–900 band, which would now reject every real
+    // frequency this vessel actually has.
+    const f = Math.min(BANK_FREQ_MAX, Math.max(BANK_FREQ_MIN, freqHz));
     const bw = BASE_BW + (1 - this.response) * 0.03;
     const tau = 1.25 - this.response * 0.95; // response: snappy ↔ slow build
     const k = 1 - Math.exp(-dt / Math.max(0.05, tau));
@@ -118,6 +121,9 @@ function key(mode: CymaticMode): string {
 
 /** Soft detuning response: 1 on resonance, → 0 as the drive leaves the mode. */
 function resonanceWeight(fMode: number, fDrive: number, bw: number): number {
-  const d = Math.log(fMode / Math.max(10, fDrive));
+  // Floor the drive near zero rather than at 10 Hz. Every mode of this vessel
+  // sits below 10 Hz, so a 10 Hz floor pinned all of them to the same detuning
+  // distance and flattened the response curve entirely.
+  const d = Math.log(fMode / Math.max(1e-3, fDrive));
   return Math.exp(-(d / bw) * (d / bw));
 }

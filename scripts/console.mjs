@@ -17,7 +17,7 @@ page.on('console', (m) => {
   if (t === 'error' || t === 'warning') console.log(`[${t}]`, m.text().slice(0, 1400));
 });
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 600)));
-await page.goto(URL + '?drive=432&level=0.9', { waitUntil: 'networkidle0' });
+await page.goto(URL + '?drive=4.5&level=0.9', { waitUntil: 'networkidle0' });
 await sleep(5000);
 
 const info = await page.evaluate(() => {

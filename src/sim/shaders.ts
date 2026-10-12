@@ -314,9 +314,15 @@ void main() {
   // divergent by definition — it cannot be folded into the curl above without
   // destroying the very migration that makes the pattern legible. Driving
   // pigment purely by curl gives swirling colour but never a figure.
+  // Gradient of shape², in PER-PIXEL units rather than per-texel. Dividing by
+  // the texel size (the old inv2x/inv2y) made this term scale with resolution:
+  // at 1024² it was ~1000× stronger than the surrounding flow, so pigment
+  // snapped into hard one-texel bands at the nodes instead of drifting onto
+  // them smoothly. Normalising by a fixed scale keeps the migration a gentle
+  // settling force, which is what real powder does.
   vec2 gradShape2 = vec2(fR.g * fR.g - fL.g * fL.g,
                          fU.g * fU.g - fD.g * fD.g);
-  flow -= uGather * gradShape2 * vec2(inv2x, inv2y);
+  flow -= uGather * gradShape2 * 64.0;
 
   // ambient stir: analytic curl of two drifting wave trains. Amplitude
   // tracks the drive, so a higher tone visibly churns the water faster.
