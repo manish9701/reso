@@ -255,8 +255,8 @@ export class Studio {
     const tan = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
     const projHalfW = 1.10;   // dish half-width + a little breathing room
     const projHalfH = 0.99;   // foreshortened half-height + rim
-    const wFrac = aspect >= 1.2 ? 0.62 : aspect >= 0.9 ? 0.78 : 0.9;
-    const vFrac = 0.8;
+    const wFrac = aspect >= 1.2 ? 0.70 : aspect >= 0.9 ? 0.82 : 0.9;
+    const vFrac = 0.90;
     const dW = projHalfW / (wFrac * tan * aspect);
     const dH = projHalfH / (vFrac * tan);
     const d = Math.max(dW, dH);
