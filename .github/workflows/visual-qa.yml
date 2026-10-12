@@ -1,0 +1,55 @@
+name: Cymatics browser visual QA
+
+on:
+  push:
+    branches:
+      - main
+      - cymatics-visual-qa-polish
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Start production preview
+        run: |
+          npm run preview -- --host 127.0.0.1 > /tmp/reso-preview.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then
+              echo "Production preview is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/reso-preview.log
+          exit 1
+      - name: Verify rendered water, pigment, and frequency response
+        run: node scripts/verify.mjs http://127.0.0.1:4173/
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          VISUAL_QA_OUT: /tmp/reso-visual-qa
+          WEBGL_SOFTWARE_RENDERER: "1"
+      - name: Upload browser captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cymatics-visual-qa
+          path: /tmp/reso-visual-qa/*.png
+          if-no-files-found: warn
+          retention-days: 7
