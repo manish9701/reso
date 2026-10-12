@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { TAU, clamp, downloadPNG } from '../lib/utils';
+import { TAU, clamp, lerp, downloadPNG } from '../lib/utils';
 import { getGL, createProgram, drawFullscreen, fitCanvas, FULLSCREEN_VS } from '../lib/gl';
 import { getSettings } from '../lib/settings';
 import { useRafLoop, useResize } from '../lib/hooks';
@@ -20,6 +20,7 @@ type WaveKind = 'soft' | 'sharp' | 'triple';
 type View = 'shaded' | 'lines' | 'both';
 
 interface Pulse { x: number; y: number; amp: number; t0: number; wl: number; rings: number; dep: number }
+interface FossilSnapshot { persist: Float32Array; pulses: Pulse[] }
 const KINDS: Record<WaveKind, { wl: number; rings: number; dep: number }> = {
   soft: { wl: 0.05, rings: 1, dep: 0.5 },
   sharp: { wl: 0.028, rings: 1, dep: 0.8 },
@@ -80,12 +81,12 @@ void main(){
   }
   vec2 q = frag / res - 0.5;
   col *= 1.0 - dot(q, q) * 0.9;
-  col += (hash(frag + fract(time) * 53.7) - 0.5) * 0.030;
+  col += (hash(floor(frag * 0.75)) - 0.5) * 0.012;
   gl_FragColor = vec4(col, 1.0);
 }
 `;
 
-const GW = 360;
+const GW = 420;
 
 class FossilEngine {
   cv: HTMLCanvasElement;
@@ -98,7 +99,7 @@ class FossilEngine {
   wave = new Float32Array(GW * this.GH);
   bytes = new Uint8Array(GW * this.GH * 4);
   pulses: Pulse[] = [];
-  undo: Float32Array[] = [];
+  undo: FossilSnapshot[] = [];
   W = 2; H = 2;
   time = 0;
   dead = false;
@@ -112,17 +113,7 @@ class FossilEngine {
   constructor(cv: HTMLCanvasElement) {
     this.cv = cv;
     this.gl = getGL(cv);
-    // seed primordial dunes so the empty field already has topography
-    for (let y = 0; y < this.GH; y++) {
-      for (let x = 0; x < GW; x++) {
-        const nx = x / GW, ny = y / this.GH;
-        const dunes =
-          Math.sin(nx * 21 + Math.sin(ny * 13) * 2.1) * 0.05 +
-          Math.sin(ny * 27 + Math.sin(nx * 9) * 1.7) * 0.04 +
-          (Math.random() - 0.5) * 0.024;
-        this.persist[y * GW + x] = dunes;
-      }
-    }
+    this.seedTerrain();
     if (this.gl) {
       const gl = this.gl;
       this.prog = createProgram(gl, FULLSCREEN_VS, FOSSIL_FS);
@@ -139,11 +130,24 @@ class FossilEngine {
   resize(w: number, h: number) {
     const r = fitCanvas(this.cv, { clientWidth: Math.max(2, w), clientHeight: Math.max(2, h) }, 1.5);
     this.W = r.W; this.H = r.H;
-    const GH = clamp(Math.round((GW * r.H) / r.W), 120, 300);
+    const GH = clamp(Math.round((GW * r.H) / r.W), 140, 320);
     if (GH !== this.GH) {
+      // Resample the persistent relief vertically instead of cropping rows when
+      // the viewport aspect ratio changes. Existing landforms stay recognizable.
+      const old = this.persist;
+      const oldH = this.GH;
       const np = new Float32Array(GW * GH);
-      const rows = Math.min(GH, this.GH);
-      for (let y = 0; y < rows; y++) np.set(this.persist.subarray(y * GW, y * GW + GW), y * GW);
+      for (let y = 0; y < GH; y++) {
+        const sy = (y / Math.max(1, GH - 1)) * (oldH - 1);
+        const y0 = Math.floor(sy);
+        const y1 = Math.min(oldH - 1, y0 + 1);
+        const fy = sy - y0;
+        for (let x = 0; x < GW; x++) {
+          const a = old[y0 * GW + x];
+          const b = old[y1 * GW + x];
+          np[y * GW + x] = a + (b - a) * fy;
+        }
+      }
       this.persist = np;
       this.wave = new Float32Array(GW * GH);
       this.bytes = new Uint8Array(GW * GH * 4);
@@ -152,32 +156,79 @@ class FossilEngine {
     this.gl?.viewport(0, 0, r.W, r.H);
   }
 
+  seedTerrain() {
+    // Deterministic shallow dunes: avoid random pixel noise so the first frame
+    // reads as fine mineral sand rather than a noisy height texture.
+    for (let y = 0; y < this.GH; y++) {
+      for (let x = 0; x < GW; x++) {
+        const nx = x / GW, ny = y / this.GH;
+        const dunes =
+          Math.sin(nx * 18.0 + Math.sin(ny * 10.5) * 1.65) * 0.048 +
+          Math.sin(ny * 23.0 + Math.sin(nx * 8.2) * 1.25) * 0.032 +
+          Math.sin(nx * 53.0 + Math.cos(ny * 37.0)) * 0.006;
+        this.persist[y * GW + x] = dunes;
+      }
+    }
+  }
+
+  resetTerrain() {
+    this.seedTerrain();
+    this.wave.fill(0);
+    this.pulses = [];
+    this.kept = 0;
+  }
+
   snapshot() {
-    this.undo.push(this.persist.slice());
+    // Undo must restore the active pulses too. Otherwise an undone pulse keeps
+    // depositing ridges on the next frame and appears to undo itself.
+    this.undo.push({
+      persist: this.persist.slice(),
+      pulses: this.pulses.map((p) => ({ ...p })),
+    });
     if (this.undo.length > 8) this.undo.shift();
   }
 
-  fire(nx: number, ny: number, amp: number) {
+  fire(nx: number, ny: number, amp: number, playSound = true) {
     if (this.frozen || this.dead) return;
     const k = KINDS[this.waveKind];
     this.pulses.push({ x: nx, y: ny, amp: amp * this.power, t0: this.time, wl: k.wl, rings: k.rings, dep: k.dep });
     if (this.pulses.length > 10) this.pulses.shift();
-    void Audio.ensureAudio().then(() => Audio.thump(0.4 + amp * 0.4));
+    if (playSound) void Audio.ensureAudio().then(() => Audio.thump(0.4 + amp * 0.4)).catch(() => {});
   }
 
   rake(nx: number, ny: number, pxn: number, pyn: number) {
     const cx0 = clamp(Math.round(nx * GW), 0, GW - 1);
     const cy0 = clamp(Math.round(ny * this.GH), 0, this.GH - 1);
-    const R = 7;
-    const dx = (nx - pxn) * GW, dy = (ny - pyn) * this.GH;
+    const R = 9;
+    const dx = (nx - pxn) * GW;
+    const dy = (ny - pyn) * this.GH;
+    const travel = Math.hypot(dx, dy);
+    const ux = travel > 0.001 ? dx / travel : 1;
+    const uy = travel > 0.001 ? dy / travel : 0;
+    const strength = clamp(travel * 0.008, 0.012, 0.075);
+
     for (let j = -R; j <= R; j++) for (let i = -R; i <= R; i++) {
       const x = cx0 + i, y = cy0 + j;
       if (x < 0 || y < 0 || x >= GW || y >= this.GH) continue;
-      const d = Math.hypot(i, j) / R;
-      if (d > 1) continue;
+      const across = (-i * uy + j * ux) / R;
+      const along = (i * ux + j * uy) / R;
+      const d2 = (i * i + j * j) / (R * R);
+      if (d2 > 1.15) continue;
       const k = y * GW + x;
-      if (this.tool === 'rake') this.persist[k] = clamp(this.persist[k] + (1 - d) * (dx * 0.06 + dy * 0.06), -1.6, 1.6);
-      else this.persist[k] *= 0.86;
+      if (this.tool === 'rake') {
+        // A rake creates a narrow raised berm and a shallow trough behind it;
+        // the profile follows the user's stroke direction instead of simply
+        // adding the same height everywhere inside a circular brush.
+        const brush = Math.exp(-d2 * 2.5);
+        const ridge = Math.exp(-Math.pow((along - 0.18) / 0.22, 2) * 2.0) * Math.exp(-across * across * 5.0);
+        const trough = Math.exp(-Math.pow((along + 0.24) / 0.25, 2) * 2.0) * Math.exp(-across * across * 5.0);
+        this.persist[k] = clamp(this.persist[k] + strength * (ridge - trough) * brush * 2.6, -1.6, 1.6);
+      } else {
+        // Erase eases the relief back toward the quiet base rather than
+        // creating a hard circular divot.
+        const smooth = clamp((1.15 - d2) * 0.11, 0, 0.12);
+        this.persist[k] = lerp(this.persist[k], 0, smooth);
+      }
     }
   }
 
@@ -273,8 +324,8 @@ export default function Fossil() {
     if (!e.gl) setNoGL(true);
     e.resize(cv.parentElement!.clientWidth, cv.parentElement!.clientHeight);
     const seeded = { n: 0 };
-    const t1 = setTimeout(() => { if (!e.dead) { e.fire(0.4, 0.45, 0.9); seeded.n++; } }, 450);
-    const t2 = setTimeout(() => { if (!e.dead) { e.fire(0.62, 0.55, 0.9); seeded.n++; } }, 1150);
+    const t1 = setTimeout(() => { if (!e.dead) { e.fire(0.4, 0.45, 0.9, false); seeded.n++; } }, 450);
+    const t2 = setTimeout(() => { if (!e.dead) { e.fire(0.62, 0.55, 0.9, false); seeded.n++; } }, 1150);
     const t3 = setTimeout(() => { if (!e.dead && seeded.n === 2) { e.snapshot(); e.kept++; } }, 1350);
     const hint = setTimeout(() => setHintGone(true), 9000);
     const stat = setInterval(() => setStats(`${e.pulses.length} live · ${e.kept} kept`), 700);
@@ -305,9 +356,7 @@ export default function Fossil() {
     const e = eng.current;
     if (!e) return;
     e.snapshot();
-    e.persist.fill(0);
-    e.wave.fill(0);
-    e.pulses = [];
+    e.resetTerrain();
   }
 
   function pos(ev: React.PointerEvent) {
@@ -341,7 +390,7 @@ export default function Fossil() {
             const l = lastN.current;
             if (!l) { lastN.current = p; return; }
             if (e.tool === 'pulse') {
-              if (Math.hypot(p.nx - l.nx, p.ny - l.ny) > 0.03) { e.fire(p.nx, p.ny, 0.55); lastN.current = p; }
+              if (Math.hypot(p.nx - l.nx, p.ny - l.ny) > 0.03) { e.fire(p.nx, p.ny, 0.55, false); lastN.current = p; }
             } else {
               e.rake(p.nx, p.ny, l.nx, l.ny);
               lastN.current = p;
@@ -370,7 +419,7 @@ export default function Fossil() {
           ))}
         </Group>
         <Group>
-          <Btn onClick={() => { const e = eng.current; if (!e) return; const s = e.undo.pop(); if (s) { e.persist.set(s); e.kept = Math.max(0, e.kept - 1); } }}>Undo</Btn>
+          <Btn onClick={() => { const e = eng.current; if (!e) return; const s = e.undo.pop(); if (s) { e.persist.set(s.persist); e.pulses = s.pulses.map((p) => ({ ...p })); e.wave.fill(0); e.kept = Math.max(0, e.kept - 1); } }}>Undo</Btn>
           <Btn active={frozen} onClick={toggleFreeze}>{frozen ? 'Continue' : 'Freeze'}</Btn>
           <Btn warn onClick={clearAll}>Clear</Btn>
           <Btn onClick={() => canvasRef.current && downloadPNG(canvasRef.current, 'sonar-fossil')}>Export</Btn>
