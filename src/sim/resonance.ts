@@ -26,7 +26,7 @@ export interface ModeSlot {
 /** log-frequency bandwidth of a mode's response, in ln(f) units.
  *  Narrow enough that a tuned tone lights up 1–3 neighbouring modes —
  *  the figure reads as a pattern, not as interference soup. */
-const BASE_BW = 0.085;
+const BASE_BW = 0.055;
 
 export class ResonanceModel {
   boundary: Boundary = 'rigid';
@@ -57,17 +57,22 @@ export class ResonanceModel {
    */
   update(dt: number, freqHz: number, level: number): ModeSlot[] {
     const f = Math.min(FREQ_MAX, Math.max(FREQ_MIN, freqHz));
-    const bw = BASE_BW + (1 - this.response) * 0.03;
+    const bw = BASE_BW + (1 - this.response) * 0.018;
     const tau = 1.25 - this.response * 0.95; // response: snappy ↔ slow build
     const k = 1 - Math.exp(-dt / Math.max(0.05, tau));
 
     const targets = new Map<string, number>();
     for (const mode of this.bank) {
-      let w = resonanceWeight(mode.freq, f, bw);
-      if (this.harm > 1) w = Math.max(w, 0.55 * resonanceWeight(mode.freq, f * this.harm, bw));
-      if (w < 0.02) continue;
+      // Keep the driven mode coherent. A small amount of the second nearest
+      // mode can enrich the pattern, but broad overlapping modes turn the
+      // standing figure into a pale interference sheet with no clear nodes.
+      const w = resonanceWeight(mode.freq, f, bw);
+      if (w < 0.035) continue;
       targets.set(key(mode), level * w);
     }
+    // Harmonics are intentionally not added as a second frequency family
+    // here: the minimal UI has one frequency control and should read as one
+    // crisp resonance at a time rather than a stack of unrelated modes.
 
     // decay amplitudes of modes the drive no longer touches
     for (const [key, amp] of this.amps) {
@@ -85,12 +90,12 @@ export class ResonanceModel {
       if (Math.abs(amp) > 0.01) slots.push({ m: mode.m, kR: mode.k * VESSEL.radius, amp });
     }
     slots.sort((a, b) => Math.abs(b.amp) - Math.abs(a.amp));
-    // Keep the dominant mode and only neighbours within 45% of its
-    // amplitude. Equal-weight superposition of four modes reads as mush;
-    // one dominant figure plus a hint of its neighbours reads as cymatics.
+    // One selected mode keeps the frequency-to-pattern relationship legible.
+    // The travelling-wave solver remains responsible for the transient,
+    // interference and natural variation caused by pointer strikes.
     const top = Math.abs(slots[0]?.amp ?? 0);
-    const kept = slots.filter((s) => Math.abs(s.amp) > top * 0.45);
-    return kept.slice(0, 2);
+    const kept = slots.filter((s) => Math.abs(s.amp) > top * 0.78);
+    return kept.slice(0, 1);
   }
 
   /** Dominant mode name for diagnostics / debug overlay. */
