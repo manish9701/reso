@@ -115,25 +115,42 @@ await page.evaluate(() => {
 await wait(6000);
 await page.screenshot({ path: path.join(OUT, 'rt-3-pigment.png') });
 
-// sweep frequency — the figure must reorganise, with cell count rising.
-// Real Hz: these are actual resonances of the vessel, not a mapped UI band.
+// sweep frequency — settle each modal response independently, then render
+// its actual GPU figure. In SwiftShader, a 1.4-second wait may only permit
+// 2–3 animation frames, which is not enough simulated time for low tones to
+// build; manual fixed steps make this test deterministic rather than hardware-
+/* dependent. The normal app still uses its live, time-based update loop. */
+//
+// Frequencies are REAL Hz: actual resonances of this vessel, so each step
+// lands on a genuinely distinct mode rather than on a mapped UI band.
 const modeSignatures = new Set();
 for (const hz of [1.7, 2.4, 3.4, 4.5, 5.8, 8.4]) {
-  await page.evaluate((f) => {
+  const m = await page.evaluate((f) => {
     const e = window.__lab;
-    // Each sample starts from a clean resonance state. Otherwise the previous
-    // frequency's slowly decaying modes contaminate the next signature and
-    // the test can pass even when the new frequency hasn't selected a new mode.
     e.resonance.reset();
     e.forcedDrive = { freq: f, level: 0.85 };
+    e.drive.freq = f;
+    e.drive.level = 0.85;
+    let slots = [];
+    // 3 simulated seconds to establish the new frequency's driven response.
+    for (let i = 0; i < 60; i++) slots = e.resonance.update(0.05, f, 0.85);
+    e.figure.render(e.studio.renderer, slots, e.time);
+    e.combine.material.uniforms.uFigure.value = e.figure.texture;
+    e.combine.material.uniforms.uWave.value = e.wave.texture;
+    e.combine.render(e.studio.renderer, e.fieldTarget);
+    e.liquidUniforms.uField.value = e.fieldTarget.texture;
+    e.liquidUniforms.uDye.value = e.pigment.texture;
+    e.liquidUniforms.uTime.value = e.time;
+    e.studio.render();
+    return slots.map((s) => `m${s.m}@${s.kR.toFixed(1)}`).join(',');
   }, hz);
-  await wait(3000);
-  const m = await page.evaluate(() => window.__lab.figure.slots.map((s) => `m${s.m}@${s.kR.toFixed(1)}`).join(','));
   console.log(`${hz} Hz -> ${m}`);
+  if (!m) errors.push(`SIM: no resonant mode resolved at ${hz} Hz`);
   modeSignatures.add(m);
+  await wait(3000);
   await page.screenshot({ path: path.join(OUT, `rt-4-swept-${hz}.png`) });
 }
-if (modeSignatures.size < 3) errors.push('SIM: frequency sweep did not produce enough distinct modal patterns');
+if (modeSignatures.size < 4) errors.push('SIM: frequency sweep did not produce enough distinct modal patterns');
 
 console.log('SCREENSHOTS:', OUT);
 console.log('ERRORS:', errors.length ? errors.slice(0, 6) : 'none');
