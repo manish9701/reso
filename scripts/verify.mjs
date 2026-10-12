@@ -16,6 +16,8 @@ const DEFAULT_CHROME = process.platform === 'win32'
 const CHROME = process.env.CHROME_PATH || DEFAULT_CHROME;
 const URL = process.argv[2] ?? 'http://localhost:5173/';
 const OUT = process.env.VISUAL_QA_OUT || path.join(os.tmpdir(), 'reso-visual-qa');
+const FAST = process.env.VISUAL_QA_FAST === '1';
+const wait = (ms) => sleep(FAST ? Math.min(ms, 1400) : ms);
 fs.mkdirSync(OUT, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -31,7 +33,9 @@ const browser = await puppeteer.launch({
       ? ['--enable-webgl', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
       : []),
   ],
-  defaultViewport: { width: 1536, height: 1024 },
+  defaultViewport: process.env.WEBGL_SOFTWARE_RENDERER === '1'
+    ? { width: 1280, height: 800 }
+    : { width: 1536, height: 1024 },
 });
 const page = await browser.newPage();
 const errors = [];
@@ -62,7 +66,7 @@ page.on('pageerror', (e) => { errors.push(String(e)); console.log('[pageerror]',
 // Use the deterministic drive hook: headless audio autoplay is unreliable, and
 // a tone that silently never starts makes every later assertion meaningless.
 await page.goto(URL + '?drive=4.5&level=0.85', { waitUntil: 'networkidle0' });
-await sleep(4000);
+await wait(4000);
 
 // prove the water is actually on screen and actually being driven
 const health = await page.evaluate(() => {
@@ -91,12 +95,13 @@ await page.screenshot({ path: path.join(OUT, 'rt-1-idle.png') });
 const fps = await page.evaluate(() => new Promise((resolve) => {
   let n = 0;
   const t0 = performance.now();
-  const tick = () => { n++; if (performance.now() - t0 < 2000) requestAnimationFrame(tick); else resolve(n / 2); };
+  const duration = FAST ? 800 : 2000;
+  const tick = () => { n++; if (performance.now() - t0 < duration) requestAnimationFrame(tick); else resolve(n / (duration / 1000)); };
   requestAnimationFrame(tick);
 }));
 console.log('FPS:', fps.toFixed(1));
 
-await sleep(6000);
+await wait(6000);
 await page.screenshot({ path: path.join(OUT, 'rt-2-tone.png') });
 
 // pour pigment across the dish and let the figure organise it
@@ -108,7 +113,7 @@ await page.evaluate(() => {
   }
   e.deposit(0.5, 0.5, 0.05, 0.8, [0.92, 0.24, 0.55]);
 });
-await sleep(6000);
+await wait(6000);
 await page.screenshot({ path: path.join(OUT, 'rt-3-pigment.png') });
 
 // sweep frequency — the figure must reorganise, with cell count rising.
@@ -116,7 +121,7 @@ await page.screenshot({ path: path.join(OUT, 'rt-3-pigment.png') });
 const modeSignatures = new Set();
 for (const hz of [1.7, 2.4, 3.4, 4.5, 5.8, 8.4]) {
   await page.evaluate((f) => { window.__lab.forcedDrive = { freq: f, level: 0.85 }; }, hz);
-  await sleep(3000);
+  await wait(3000);
   const m = await page.evaluate(() => window.__lab.figure.slots.map((s) => `m${s.m}@${s.kR.toFixed(1)}`).join(','));
   console.log(`${hz} Hz -> ${m}`);
   modeSignatures.add(m);
