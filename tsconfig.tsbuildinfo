@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/lib/audio.ts","./src/lib/dock.ts","./src/lib/gl.ts","./src/lib/hooks.ts","./src/lib/settings.ts","./src/lib/utils.ts","./src/toys/fossil.tsx","./src/toys/garden.tsx","./src/toys/ink.tsx","./src/toys/moire.tsx","./src/toys/weaver.tsx","./src/ui/home.tsx","./src/ui/chrome.tsx"],"version":"5.7.3"}
