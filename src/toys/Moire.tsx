@@ -142,12 +142,15 @@ class MoireEngine {
       ring.addEventListener('pointercancel', up);
     }
     cv.addEventListener('pointerdown', (ev) => {
-      cv.setPointerCapture(ev.pointerId);
       const r = stage.getBoundingClientRect();
       const mx = (ev.clientX - r.left) / r.width, my = (ev.clientY - r.top) / r.height;
-      const dA = Math.hypot(mx - this.A.x, my - this.A.y);
-      const dB = Math.hypot(mx - this.B.x, my - this.B.y);
-      this.dragP = dA < dB ? this.A : this.B;
+      const hitA = this.containsPlate(mx, my, this.A);
+      const hitB = this.containsPlate(mx, my, this.B);
+      // Only grab a plate when the pointer is actually over its sheet. When
+      // sheets overlap, B is on top and wins the hit test.
+      if (!hitA && !hitB) { this.dragP = null; return; }
+      cv.setPointerCapture(ev.pointerId);
+      this.dragP = hitB ? this.B : this.A;
       this.dragP.vx = this.dragP.vy = 0;
       this.lastM = { x: mx, y: my };
       this.lastT = performance.now();
@@ -211,22 +214,99 @@ class MoireEngine {
     }
   }
 
+  containsPlate(nx: number, ny: number, p: Plate) {
+    const dx = (nx - p.x) * this.W;
+    const dy = (ny - p.y) * this.H;
+    const co = Math.cos(p.rot), si = Math.sin(p.rot);
+    const lx = dx * co + dy * si;
+    const ly = -dx * si + dy * co;
+    return Math.abs(lx) <= this.W * 0.26 * p.scale && Math.abs(ly) <= this.H * 0.32 * p.scale;
+  }
+
   drawPlate(p: Plate) {
     if (!p.tile) p.tile = makeTile(p);
     const { cx, W, H } = this;
+    const pw = W * 0.52;
+    const ph = H * 0.64;
+    const radius = Math.min(W, H) * 0.025;
+    const makeRoundRect = () => {
+      const x = -pw / 2, y = -ph / 2, r = radius;
+      cx.beginPath();
+      cx.moveTo(x + r, y);
+      cx.lineTo(x + pw - r, y); cx.quadraticCurveTo(x + pw, y, x + pw, y + r);
+      cx.lineTo(x + pw, y + ph - r); cx.quadraticCurveTo(x + pw, y + ph, x + pw - r, y + ph);
+      cx.lineTo(x + r, y + ph); cx.quadraticCurveTo(x, y + ph, x, y + ph - r);
+      cx.lineTo(x, y + r); cx.quadraticCurveTo(x, y, x + r, y);
+      cx.closePath();
+    };
+
     cx.save();
     cx.translate(p.x * W, p.y * H);
     cx.rotate(p.rot);
     cx.scale(p.scale, p.scale);
-    cx.globalAlpha = p.opacity;
+
+    // A plate is a bounded translucent sheet, not an infinite pattern. The
+    // only complex geometry is the line pattern itself; depth comes from its
+    // glass tint, a soft shadow and two restrained edge strokes.
+    cx.save();
+    makeRoundRect();
+    cx.shadowColor = p.color;
+    cx.shadowBlur = Math.min(W, H) * 0.035;
+    cx.fillStyle = this.theme === 'lab' ? 'rgba(116, 166, 220, 0.07)' : 'rgba(255, 250, 232, 0.58)';
+    cx.fill();
+    cx.shadowBlur = 0;
+
+    makeRoundRect();
+    cx.clip();
     cx.globalCompositeOperation = this.blend;
-    const S = Math.max(W, H) * 1.6;
-    cx.translate(-S / 2, -S / 2);
+    cx.globalAlpha = p.opacity;
     cx.fillStyle = cx.createPattern(p.tile, 'repeat')!;
-    cx.fillRect(0, 0, S, S);
+    cx.fillRect(-pw / 2, -ph / 2, pw, ph);
+    cx.globalCompositeOperation = 'source-over';
+    cx.globalAlpha = 1;
+
+    // Subtle transmission gradient, strongest at the edge so the pattern
+    // remains legible where both plates intersect.
+    const sheen = cx.createLinearGradient(-pw / 2, -ph / 2, pw / 2, ph / 2);
+    if (this.theme === 'lab') {
+      sheen.addColorStop(0, 'rgba(230, 246, 255, 0.11)');
+      sheen.addColorStop(0.48, 'rgba(106, 151, 215, 0.015)');
+      sheen.addColorStop(1, 'rgba(235, 178, 232, 0.065)');
+    } else {
+      sheen.addColorStop(0, 'rgba(255, 255, 255, 0.18)');
+      sheen.addColorStop(1, 'rgba(126, 104, 72, 0.035)');
+    }
+    cx.fillStyle = sheen;
+    cx.fillRect(-pw / 2, -ph / 2, pw, ph);
+    cx.restore();
+
+    makeRoundRect();
+    cx.lineWidth = Math.max(1, Math.min(W, H) * 0.0022);
+    cx.strokeStyle = this.theme === 'lab' ? 'rgba(202, 224, 255, 0.58)' : 'rgba(83, 69, 51, 0.55)';
+    cx.stroke();
+
+    makeRoundRect();
+    cx.lineWidth = Math.max(0.6, Math.min(W, H) * 0.0008);
+    cx.strokeStyle = this.theme === 'lab' ? 'rgba(255, 255, 255, 0.16)' : 'rgba(255, 255, 255, 0.38)';
+    cx.stroke();
+
+    // Four registration notches reinforce the feeling of moving a physical
+    // patterned plate and make its extent easy to read.
+    const notch = Math.min(W, H) * 0.016;
+    cx.strokeStyle = this.theme === 'lab' ? 'rgba(221, 235, 255, 0.62)' : 'rgba(71, 59, 45, 0.62)';
+    cx.lineWidth = Math.max(1, Math.min(W, H) * 0.0016);
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+      const x = sx * (pw / 2 - notch * 0.75);
+      const y = sy * (ph / 2 - notch * 0.75);
+      cx.beginPath();
+      cx.moveTo(x - sx * notch * 0.45, y);
+      cx.lineTo(x + sx * notch * 0.45, y);
+      cx.moveTo(x, y - sy * notch * 0.45);
+      cx.lineTo(x, y + sy * notch * 0.45);
+      cx.stroke();
+    }
     cx.restore();
   }
-
   step(dt: number) {
     if (this.dead) return;
     // inertia
@@ -259,7 +339,7 @@ class MoireEngine {
     const r = this.stage.getBoundingClientRect();
     [[this.A, this.handles[0]], [this.B, this.handles[1]]].forEach(([p, h]) => {
       const pl = p as Plate, hh = h as HTMLDivElement;
-      const off = 92;
+      const off = Math.min(r.width * 0.30, r.height * 0.32) * pl.scale;
       hh.style.left = `${(pl.x * r.width + Math.cos(pl.rot + Math.PI / 2) * off).toFixed(1)}px`;
       hh.style.top = `${(pl.y * r.height + Math.sin(pl.rot + Math.PI / 2) * off).toFixed(1)}px`;
     });
