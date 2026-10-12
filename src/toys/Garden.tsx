@@ -39,67 +39,104 @@ uniform vec3 spos[${NSRC}];
 uniform vec4 sprm[${NSRC}];
 uniform vec3 scol[${NSRC}];
 
-vec3 pal(float v) {
-  return 0.5 + 0.5 * cos(6.2831 * (v * vec3(1.0, 0.9, 0.8) + vec3(0.0, 0.15, 0.35)));
-}
 float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
-void main(){
+vec3 spectral(float x) {
+  return 0.52 + 0.48 * cos(6.28318 * (x + vec3(0.02, 0.34, 0.68)));
+}
+
+void main() {
   vec2 frag = gl_FragCoord.xy;
   vec2 uv = frag / res;
   vec2 asp = vec2(res.x / res.y, 1.0);
-  // gentle domain warp — the field breathes
-  vec2 wuv = uv * asp;
-  wuv += 0.055 * vec2(sin(2.6 * wuv.y + time * 0.30), cos(2.4 * wuv.x - time * 0.24));
-  float f = 0.0;
+  vec2 p = (uv - 0.5) * asp;
+
+  // Keep a very small drift in the domain. The radial wave fronts should
+  // remain readable and geometric; they must not dissolve into a noise field.
+  vec2 wp = p + 0.009 * vec2(
+    sin(p.y * 5.1 + time * 0.22),
+    cos(p.x * 4.7 - time * 0.19)
+  );
+
+  float field = 0.0;
+  float energy = 0.0;
+  vec3 sourceGlow = vec3(0.0);
+  vec3 localTint = vec3(0.0);
+  float totalInfluence = 0.0;
+
   for (int i = 0; i < ${NSRC}; i++) {
     if (i >= n) break;
-    vec2 d = (wuv - spos[i].xy * asp);
-    float dist = length(d) + 1e-5;
-    float k = sprm[i].x * 22.0 + 4.0;
-    float om = sprm[i].x * 3.2 + 0.6;
-    f += sprm[i].y * sin(k * dist - om * time + sprm[i].z);
+    vec2 source = (spos[i].xy - 0.5) * asp;
+    vec2 d = wp - source;
+    float dist = length(d) + 0.0001;
+    float freq = sprm[i].x;
+    float amp = sprm[i].y;
+    float phase = sprm[i].z;
+
+    float k = 18.0 + freq * 17.0;
+    float omega = 1.1 + freq * 2.6;
+    float theta = k * dist - omega * time + phase;
+    float attenuation = 1.0 / sqrt(0.24 + dist * 1.45);
+    float wave = sin(theta) * amp * attenuation;
+
+    field += wave;
+    energy += abs(wave);
+
+    float ring = exp(-abs(sin(theta * 0.5)) * 18.0) * exp(-dist * 0.55) * amp;
+    sourceGlow += scol[i] * ring * 0.18;
+
+    float nearSource = exp(-dist * 5.0) * amp;
+    localTint += scol[i] * nearSource;
+    totalInfluence += nearSource;
   }
-  f /= float(n); // n >= 1 always (a source cannot be removed below one)
-  vec3 bg = vec3(0.014, 0.018, 0.042);
-  vec3 outc = bg;
-  vec3 glow = vec3(0.0);
-  for (int i = 0; i < ${NSRC}; i++) {
-    if (i >= n) break;
-    vec2 d = (wuv - spos[i].xy * asp);
-    glow += scol[i] * exp(-dot(d, d) * 300.0);
-  }
-  if (mode == 1) {
-    float v = f * 0.5 + 0.5;
-    vec3 c1 = vec3(0.10, 0.83, 0.80);
-    vec3 c2 = vec3(0.44, 0.34, 1.0);
-    vec3 c3 = vec3(1.0, 0.30, 0.58);
-    outc = mix(bg, mix(c1, c2, smoothstep(0.0, 0.55, v)), smoothstep(0.02, 0.5, v));
-    outc = mix(outc, c3, smoothstep(0.55, 0.95, v) * 0.9);
-    float node = smoothstep(0.10, 0.0, abs(f));
-    outc += vec3(0.9, 0.95, 1.0) * node * 0.38;
-    outc += glow * 0.85;
-  } else if (mode == 0) {
-    float N = 15.0;
-    float lv = f * N * 0.5;
-    float dd = abs(fract(lv + 0.5) - 0.5);
-    float aa = 0.09;
-    float line = 1.0 - smoothstep(0.0, aa, dd);
-    outc = bg + vec3(0.35, 0.30, 0.85) * (0.5 + 0.5 * f) * 0.14;
-    outc += vec3(0.55, 0.90, 1.0) * line * 0.95;
-    outc += vec3(1.0) * smoothstep(0.05, 0.0, abs(f)) * 0.22;
-    outc += glow * 1.0;
+
+  float countScale = inversesqrt(max(float(n), 1.0));
+  field *= countScale;
+  energy *= countScale;
+
+  vec3 deep = vec3(0.008, 0.012, 0.027);
+  vec3 indigo = vec3(0.023, 0.031, 0.082);
+  float vignette = 1.0 - smoothstep(0.40, 0.98, length((uv - 0.5) * asp));
+  vec3 outc = mix(deep, indigo, 0.35 + 0.15 * sin(time * 0.12));
+
+  vec3 tint = spectral(field * 0.11 + 0.58);
+  float brightBands = 0.5 + 0.5 * sin(field * 3.0);
+  float node = exp(-abs(field) * 10.0);
+  float ridge = exp(-abs(abs(field) - 0.42) * 13.0);
+  float halo = 1.0 - exp(-energy * 1.5);
+
+  if (mode == 0) {
+    // Contours: crisp isophase lines separated by dark negative space.
+    float bands = field * 3.8;
+    float d = abs(fract(bands + 0.5) - 0.5);
+    float line = 1.0 - smoothstep(0.025, 0.11, d);
+    float minorD = abs(fract(field * 11.0 + 0.5) - 0.5);
+    float minor = 1.0 - smoothstep(0.018, 0.065, minorD);
+    outc += tint * line * 0.82;
+    outc += vec3(0.45, 0.72, 0.95) * minor * 0.18;
+    outc += localTint * 0.10;
+  } else if (mode == 1) {
+    // Interference: colored wave bands with bright nodal intersections.
+    outc = mix(outc, tint * (0.28 + brightBands * 0.82), smoothstep(0.04, 0.8, energy));
+    outc += tint * node * 0.34;
+    outc += spectral(field * 0.17 + 0.14) * ridge * 0.25;
+    outc += localTint * 0.16;
   } else {
-    float fil = exp(-abs(f) * 8.0);
-    outc = bg + pal(f * 0.5 + 0.5) * fil * 0.95 + vec3(0.10, 0.15, 0.30) * (0.5 + 0.5 * f);
-    // faint echo filaments
-    float fil2 = exp(-abs(abs(f) - 0.45) * 14.0);
-    outc += pal(f * 0.5 + 0.9) * fil2 * 0.25;
-    outc += glow * 0.9;
+    // Filaments: show only stable-looking ridges and wavefronts, with an
+    // iridescent edge rather than broad filled gradients.
+    float fine = exp(-abs(field) * 14.0);
+    float secondary = exp(-abs(abs(field) - 0.30) * 22.0);
+    outc += spectral(field * 0.15 + 0.2) * fine * 0.95;
+    outc += spectral(field * 0.12 + 0.57) * secondary * 0.38;
+    outc += sourceGlow * 0.8;
   }
-  vec2 q = uv - 0.5;
-  outc *= 1.0 - dot(q, q) * 0.85;
-  outc += (hash(frag + fract(time) * 43.1) - 0.5) * 0.030;
+
+  // Source cores remain visible as tactile handles, but the whole image is
+  // driven by the wave field, not just colored blobs around the handles.
+  outc += sourceGlow;
+  outc += vec3(0.15, 0.48, 0.72) * halo * 0.05;
+  outc *= vignette;
+  outc += (hash(frag) - 0.5) * 0.009;
   gl_FragColor = vec4(outc, 1.0);
 }
 `;
