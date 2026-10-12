@@ -14,7 +14,91 @@ const PALETTE = [
 ];
 
 type Wave = { x: number; y: number; born: number; amp: number; k: number; omega: number; phase: number; decay: number };
-type AudioMetrics = { level: number; pitch: number };
+type AudioMetrics = { level: number; pitch: number; frequencyHz: number };
+
+type ResonantMode = { m: number; root: number; hz: number };
+
+// Zeros of J_m(r), the radial boundary conditions for a circular membrane.
+// Each mode's zero crossings remain still; they are not hand-authored rings.
+const BESSEL_ZEROS: number[][] = [
+  [2.4048, 5.5201, 8.6537, 11.7915, 14.9309, 18.0711, 21.2116, 24.3525, 27.4935, 30.6346],
+  [3.8317, 7.0156, 10.1735, 13.3237, 16.4706, 19.6159, 22.7601, 25.9037, 29.0468, 32.1897],
+  [5.1356, 8.4172, 11.6198, 14.7960, 17.9598, 21.1169, 24.2701, 27.4206, 30.5692, 33.7165],
+  [6.3802, 9.7610, 13.0152, 16.2235, 19.4094, 22.5827, 25.7482, 28.9084, 32.0649, 35.2187],
+  [7.5883, 11.0647, 14.3725, 17.6160, 20.8269, 24.0190, 27.1991, 30.3710, 33.5371, 36.6980],
+  [8.7715, 12.3386, 15.7002, 18.9801, 22.2178, 25.4303, 28.6266, 31.8117, 34.9888, 38.1599],
+  [9.9361, 13.5893, 17.0038, 20.3208, 23.5861, 26.8202, 30.0337, 33.2299, 36.4113, 39.5808],
+  [11.0864, 14.8213, 18.2876, 21.6415, 24.9349, 28.1912, 31.4206, 34.6294, 37.8200, 40.9960],
+  [12.2251, 16.0378, 19.5545, 22.9437, 26.2668, 29.5457, 32.7958, 36.0209, 39.2244, 42.4092],
+];
+const MODE_BASE_HZ = 55 / 2.4048;
+const MODE_BANK: ResonantMode[] = BESSEL_ZEROS.flatMap((roots, m) =>
+  roots.map((root) => ({ m, root, hz: root * MODE_BASE_HZ })),
+);
+
+function modeNearestTo(frequencyHz: number): ResonantMode {
+  const hz = clamp(frequencyHz, MODE_BANK[0].hz, MODE_BANK[MODE_BANK.length - 1].hz);
+  let best = MODE_BANK[0];
+  let distance = Infinity;
+  for (const mode of MODE_BANK) {
+    const d = Math.abs(Math.log(Math.max(1, hz) / mode.hz));
+    if (d < distance) { best = mode; distance = d; }
+  }
+  return best;
+}
+
+function besselJ0(x: number): number {
+  const ax = Math.abs(x);
+  if (ax < 8) {
+    const y = x * x;
+    const a = 57568490574 + y * (-13362590354 + y * (651619640.7 + y * (-11214424.18 + y * (77392.33017 + y * (-184.9052456))));
+    const b = 57568490411 + y * (1029532985 + y * (9494680.718 + y * (59272.64853 + y * (267.8532712 + y)));
+    return a / b;
+  }
+  const z = 8 / ax, y = z * z, xx = ax - 0.785398164;
+  const a = 1 + y * (-0.001098628627 + y * (0.00002734510407 + y * (-0.000002073370639 + y * 0.0000002093887211));
+  const b = -0.01562499995 + y * (0.0001430488765 + y * (-0.000006911147651 + y * (0.0000007621095161 - y * 0.0000000934945152));
+  return Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * a - z * Math.sin(xx) * b);
+}
+
+function besselJ1(x: number): number {
+  const ax = Math.abs(x);
+  if (ax < 8) {
+    const y = x * x;
+    const a = x * (72362614232 + y * (-7895059235 + y * (242396853.1 + y * (-2972611.439 + y * (15704.48260 + y * (-30.16036606)))));
+    const b = 144725228442 + y * (2300535178 + y * (18583304.74 + y * (99447.43394 + y * (376.9991397 + y)));
+    return a / b;
+  }
+  const z = 8 / ax, y = z * z, xx = ax - 2.356194491;
+  const a = 1 + y * (0.00183105 + y * (-0.00003516396496 + y * (0.000002457520174 + y * (-0.000000240337019)));
+  const b = 0.04687499995 + y * (-0.0002002690873 + y * (0.000008449199096 + y * (-0.00000088228987 + y * 0.000000105787412));
+  const ans = Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * a - z * Math.sin(xx) * b);
+  return x < 0 ? -ans : ans;
+}
+
+function besselJ(order: number, x: number): number {
+  if (order === 0) return besselJ0(x);
+  if (order === 1) return besselJ1(x);
+  if (Math.abs(x) < 8) {
+    const half = x * 0.5;
+    let term = 1;
+    for (let i = 1; i <= order; i++) term *= half / i;
+    let sum = term;
+    for (let k = 1; k <= 36; k++) {
+      term *= -(half * half) / (k * (k + order));
+      sum += term;
+      if (Math.abs(term) < 1e-12) break;
+    }
+    return sum;
+  }
+  let previous = besselJ0(x), current = besselJ1(x);
+  for (let n = 1; n < order; n++) {
+    const next = (2 * n / x) * current - previous;
+    previous = current;
+    current = next;
+  }
+  return current;
+}
 type InputMode = 'idle' | 'tone' | 'mic' | 'file';
 
 const WATER_FRAGMENT = `
@@ -22,6 +106,8 @@ precision highp float;
 uniform vec2 res;
 uniform float time;
 uniform sampler2D dyeTex;
+uniform sampler2D modeTex;
+uniform float modeStrength;
 uniform vec4 waveData[${MAX_WAVES}];
 uniform vec4 waveShape[${MAX_WAVES}];
 uniform float audioLevel;
@@ -70,25 +156,20 @@ void main() {
     }
   }
 
-  // Sound excites a cymatics-like plate mode: radial nodes are bent by an
-  // angular harmonic. Loudness animates the mode; pitch changes ring density
-  // and the number of lobes, so audio changes the geometry rather than just
-  // scaling a visualizer.
-  float radius = length(p);
-  float theta = atan(p.y, p.x);
-  float modeN = 3.0 + floor(audioPitch * 6.0);
-  float modeK = 15.0 + audioPitch * 37.0;
-  float modeShape = radius * modeK + 0.42 * cos(theta * modeN);
-  float temporal = cos(time * (1.25 + audioPitch * 8.0));
-  float standing = sin(modeShape) * temporal;
-  float soundField = standing * audioLevel * 1.7;
-  field += soundField;
-
-  vec2 radialDir = p / max(radius, 0.025);
-  vec2 tangentDir = vec2(-radialDir.y, radialDir.x);
-  float radialSlope = modeK * cos(modeShape) * temporal;
-  float angularSlope = -0.42 * modeN * sin(theta * modeN) * cos(modeShape) * temporal / max(radius, 0.08);
-  vec2 normalGrad = grad + audioLevel * (radialDir * radialSlope + tangentDir * angularSlope) * 0.16;
+  // A precomputed circular-membrane eigenmode drives the stationary pattern.
+  // Cursor impulses remain separate travelling waves.
+  vec4 modal = texture2D(modeTex, uv);
+  float modeValue = (modal.r - 0.5) * 2.0;
+  float modeMask = modal.a;
+  vec2 texel = 1.4 / res;
+  float modeE = (texture2D(modeTex, clamp(uv + vec2(texel.x, 0.0), vec2(0.002), vec2(0.998))).r - 0.5) * 2.0;
+  float modeW = (texture2D(modeTex, clamp(uv - vec2(texel.x, 0.0), vec2(0.002), vec2(0.998))).r - 0.5) * 2.0;
+  float modeN = (texture2D(modeTex, clamp(uv - vec2(0.0, texel.y), vec2(0.002), vec2(0.998))).r - 0.5) * 2.0;
+  float modeS = (texture2D(modeTex, clamp(uv + vec2(0.0, texel.y), vec2(0.002), vec2(0.998))).r - 0.5) * 2.0;
+  vec2 modeGradient = vec2(modeE - modeW, modeN - modeS) * 0.5;
+  vec2 normalGrad = grad + modeGradient * modeStrength * 1.8;
+  float nodalLine = exp(-abs(modeValue) * 44.0) * modeMask * modeStrength;
+  float antinode = smoothstep(0.055, 0.42, abs(modeValue)) * modeMask * modeStrength;
 
   // Refract the accumulated pigment through the moving surface normal.
   vec2 displacement = clamp(normalGrad * 0.00125, vec2(-0.025), vec2(0.025));
@@ -117,7 +198,9 @@ void main() {
   // of pigment into filaments and give the liquid a glassy, wet surface.
   col += pigment * vec3(1.08, 1.03, 1.12) * 2.35;
   float nodal = exp(-abs(sin(field * 1.85)) * 22.0) * min(1.0, abs(field) * 0.65);
-  col += spectrum(field * 0.055 + 0.18) * nodal * (0.025 + audioLevel * 0.07);
+  col += spectrum(field * 0.055 + 0.18) * nodal * 0.035;
+  col += vec3(0.42, 0.78, 0.86) * nodalLine * 0.28;
+  col += vec3(0.05, 0.12, 0.18) * antinode * 0.07;
   col += ringColor * 0.78;
   float spec = pow(clamp(1.0 - abs(field * 0.24 + length(normalGrad) * 0.012), 0.0, 1.0), 22.0);
   col += vec3(0.68, 0.88, 1.0) * spec * (0.12 + fresnel * 0.11);
@@ -136,6 +219,21 @@ class CymaticWater {
   gl: WebGLRenderingContext;
   program: WebGLProgram;
   texture: WebGLTexture;
+  modeTexture: WebGLTexture;
+  modeCanvas = document.createElement('canvas');
+  modeCtx = this.modeCanvas.getContext('2d', { willReadFrequently: false })!;
+  modePixels = new Uint8ClampedArray(this.dyeWidth * this.dyeHeight * 4);
+  modeImageData = new ImageData(this.dyeWidth, this.dyeHeight);
+  modeField = new Float32Array(this.dyeWidth * this.dyeHeight);
+  modeGradX = new Float32Array(this.dyeWidth * this.dyeHeight);
+  modeGradY = new Float32Array(this.dyeWidth * this.dyeHeight);
+  modeM = 0;
+  modeRoot = 11.7915;
+  modeNaturalHz = 269.7;
+  modeInputHz = 220;
+  modeResponse = 0.7;
+  modeStrength = 0;
+  modeKey = '';
   uniforms: Record<string, WebGLUniformLocation | null> = {};
   time = 0;
   dead = false;
@@ -167,13 +265,21 @@ class CymaticWater {
     if (!gl) throw new Error('WebGL is unavailable in this browser.');
     this.gl = gl;
     this.program = createProgram(gl, FULLSCREEN_VS, WATER_FRAGMENT);
-    for (const name of ['res', 'time', 'dyeTex', 'waveData', 'waveShape', 'audioLevel', 'audioPitch', 'pointer', 'aspect']) {
+    for (const name of ['res', 'time', 'dyeTex', 'modeTex', 'modeStrength', 'waveData', 'waveShape', 'audioLevel', 'audioPitch', 'pointer', 'aspect']) {
       this.uniforms[name] = gl.getUniformLocation(this.program, name === 'waveData' || name === 'waveShape' ? name + '[0]' : name);
     }
     const tex = gl.createTexture();
     if (!tex) throw new Error('Could not create the water pigment texture.');
     this.texture = tex;
     gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const modeTex = gl.createTexture();
+    if (!modeTex) throw new Error('Could not create the resonance texture.');
+    this.modeTexture = modeTex;
+    gl.bindTexture(gl.TEXTURE_2D, modeTex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -219,7 +325,62 @@ class CymaticWater {
       this.imageData = new ImageData(nextW, nextH);
       this.dyeCanvas.width = nextW;
       this.dyeCanvas.height = nextH;
+      this.modePixels = new Uint8ClampedArray(nextW * nextH * 4);
+      this.modeImageData = new ImageData(nextW, nextH);
+      this.modeField = new Float32Array(nextW * nextH);
+      this.modeGradX = new Float32Array(nextW * nextH);
+      this.modeGradY = new Float32Array(nextW * nextH);
+      this.modeCanvas.width = nextW;
+      this.modeCanvas.height = nextH;
+      this.updateModeField(this.modeInputHz, true);
     }
+  }
+
+  updateModeField(frequencyHz: number, force = false) {
+    const hz = clamp(frequencyHz, MODE_BANK[0].hz, MODE_BANK[MODE_BANK.length - 1].hz);
+    const next = modeNearestTo(hz);
+    const key = `${next.m}-${next.root.toFixed(3)}-${this.dyeWidth}x${this.dyeHeight}`;
+    this.modeResponse = clamp(1 / (1 + Math.pow(Math.log(Math.max(1, hz) / next.hz) / 0.12, 2)), 0.10, 1);
+    this.modeInputHz = hz;
+    if (!force && key === this.modeKey) return;
+    this.modeKey = key;
+    this.modeM = next.m;
+    this.modeRoot = next.root;
+    this.modeNaturalHz = next.hz;
+    const w = this.dyeWidth, h = this.dyeHeight;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const nx = x / Math.max(1, w - 1);
+        const ny = y / Math.max(1, h - 1);
+        const px = (nx - 0.5) * 2;
+        const py = (ny - 0.5) * 2;
+        const r = Math.hypot(px, py);
+        const theta = Math.atan2(py, px);
+        const idx = y * w + x;
+        const value = r <= 1.0 ? besselJ(next.m, next.root * r) * Math.cos(next.m * theta) : 0;
+        this.modeField[idx] = value;
+        const i = idx * 4;
+        this.modePixels[i] = Math.round(clamp(0.5 + value * 0.82, 0, 1) * 255);
+        this.modePixels[i + 1] = 128;
+        this.modePixels[i + 2] = 128;
+        this.modePixels[i + 3] = r <= 1.0 ? 255 : 0;
+      }
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const left = this.modeField[y * w + Math.max(0, x - 1)];
+      const right = this.modeField[y * w + Math.min(w - 1, x + 1)];
+      const up = this.modeField[Math.max(0, y - 1) * w + x];
+      const down = this.modeField[Math.min(h - 1, y + 1) * w + x];
+      this.modeGradX[i] = (right - left) * 0.5;
+      this.modeGradY[i] = (down - up) * 0.5;
+    }
+    this.modeImageData.data.set(this.modePixels);
+    this.modeCtx.putImageData(this.modeImageData, 0, 0);
+    this.gl.activeTexture(this.gl.TEXTURE1);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.modeTexture);
+    this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, this.modeCanvas);
+    this.gl.activeTexture(this.gl.TEXTURE0);
   }
 
   addWave(x: number, y: number, amp = 0.72, pitch = this.audioPitch) {
@@ -274,8 +435,15 @@ class CymaticWater {
     return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
   }
 
-  flowAt(nx: number, ny: number, aspect: number) {
+  flowAt(nx: number, ny: number, aspect: number, gridX: number, gridY: number) {
     let vx = 0, vy = 0;
+    const mi = gridY * this.dyeWidth + gridX;
+    const modeValue = this.modeField[mi];
+    const modeAttraction = -Math.sign(modeValue) * this.modeStrength * 1.55;
+    // Pigment migrates away from vibrating antinodes and gathers at the
+    // near-still nodal lines, while travelling cursor waves keep it moving.
+    vx += this.modeGradX[mi] * modeAttraction / Math.max(0.75, aspect);
+    vy += this.modeGradY[mi] * modeAttraction;
     for (const w of this.waves) {
       const age = this.time - w.born;
       if (age < 0 || age > 4.6) continue;
@@ -298,11 +466,11 @@ class CymaticWater {
     this.audioLevel += (metrics.level - this.audioLevel) * Math.min(1, delta * 5.5);
     this.audioPitch += (metrics.pitch - this.audioPitch) * Math.min(1, delta * 3.2);
     this.waves = this.waves.filter((w) => this.time - w.born < 4.8);
-
-    if (audioActive && this.audioLevel > 0.025 && this.time - this.lastAudioWave > 0.115) {
-      this.addWave(this.pointer.x, this.pointer.y, clamp(this.audioLevel * 3.1, 0.12, 0.92), this.audioPitch);
-      this.lastAudioWave = this.time;
-    }
+    if (audioActive && metrics.frequencyHz > 30) this.updateModeField(metrics.frequencyHz);
+    const targetModeStrength = audioActive
+      ? clamp((this.audioLevel - 0.01) * 1.7, 0, 1) * this.modeResponse
+      : 0;
+    this.modeStrength += (targetModeStrength - this.modeStrength) * Math.min(1, delta * (targetModeStrength > this.modeStrength ? 3.5 : 1.4));
 
     const w = this.dyeWidth, h = this.dyeHeight;
     const aspect = this.cssWidth / this.cssHeight;
@@ -311,7 +479,7 @@ class CymaticWater {
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
       const nX = x / Math.max(1, w - 1), nY = y / Math.max(1, h - 1);
-      const flow = this.flowAt(nX, nY, aspect);
+      const flow = this.flowAt(nX, nY, aspect, x, y);
       const backX = x - flow.x * flowScale * w + Math.sin(nY * 9 + this.time * 0.19) * 0.11;
       const backY = y - flow.y * flowScale * h + Math.cos(nX * 8 - this.time * 0.17) * 0.09;
 
@@ -348,12 +516,18 @@ class CymaticWater {
     }
     imageData.data.set(pixels);
     this.dyeCtx.putImageData(imageData, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.dyeCanvas);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.modeTexture);
     gl.useProgram(this.program);
     gl.uniform2f(this.uniforms.res, this.width, this.height);
     gl.uniform1f(this.uniforms.time, this.time);
     gl.uniform1i(this.uniforms.dyeTex, 0);
+    gl.uniform1i(this.uniforms.modeTex, 1);
+    gl.uniform1f(this.uniforms.modeStrength, this.modeStrength);
+    gl.activeTexture(gl.TEXTURE0);
     const waveData = new Float32Array(MAX_WAVES * 4);
     const waveShape = new Float32Array(MAX_WAVES * 4);
     this.waves.forEach((w, i) => {
@@ -387,6 +561,7 @@ class CymaticWater {
   dispose() {
     this.dead = true;
     this.gl.deleteTexture(this.texture);
+    this.gl.deleteTexture(this.modeTexture);
     this.gl.deleteProgram(this.program);
     try { this.gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch { /* ignore teardown errors */ }
   }
@@ -411,7 +586,7 @@ class SoundInput {
     if (!this.context) {
       this.context = new AudioContext();
       this.analyser = this.context.createAnalyser();
-      this.analyser.fftSize = 2048;
+      this.analyser.fftSize = 8192;
       this.analyser.smoothingTimeConstant = 0.76;
       this.output = this.context.createGain();
       this.output.gain.value = 0;
@@ -487,19 +662,25 @@ class SoundInput {
 
   sample(): AudioMetrics {
     const analyser = this.analyser;
-    if (!analyser) return { level: 0, pitch: 0.25 };
+    if (!analyser) return { level: 0, pitch: 0.25, frequencyHz: 220 };
     analyser.getFloatTimeDomainData(this.timeData);
     analyser.getByteFrequencyData(this.freqData);
     let sum = 0;
     for (let i = 0; i < this.timeData.length; i += 4) sum += this.timeData[i] * this.timeData[i];
     const rms = Math.sqrt(sum / Math.max(1, this.timeData.length / 4));
     let max = 0, peak = 0;
-    for (let i = 2; i < Math.min(250, this.freqData.length); i++) {
+    const sampleRate = this.context?.sampleRate ?? 44100;
+    const firstBin = Math.max(1, Math.floor(45 * analyser.fftSize / sampleRate));
+    const lastBin = Math.min(this.freqData.length - 1, Math.floor(1200 * analyser.fftSize / sampleRate));
+    for (let i = firstBin; i <= lastBin; i++) {
       if (this.freqData[i] > max) { max = this.freqData[i]; peak = i; }
     }
-    const hz = this.context ? peak * this.context.sampleRate / analyser.fftSize : 220;
-    const pitch = clamp((Math.log(Math.max(60, hz)) - Math.log(70)) / (Math.log(2500) - Math.log(70)), 0, 1);
-    return { level: clamp((rms - 0.002) * 4.1, 0, 1), pitch };
+    const detectedHz = peak * sampleRate / analyser.fftSize;
+    const hz = this.mode === 'tone' && this.oscillator
+      ? this.oscillator.frequency.value
+      : clamp(detectedHz || 220, 45, 1200);
+    const pitch = clamp((Math.log(Math.max(45, hz)) - Math.log(45)) / (Math.log(1200) - Math.log(45)), 0, 1);
+    return { level: clamp((rms - 0.002) * 4.1, 0, 1), pitch, frequencyHz: hz };
   }
 
   dispose() {
@@ -778,7 +959,7 @@ export default function Cymatics() {
           <input
             type="range"
             min={70}
-            max={1200}
+            max={900}
             step={1}
             value={frequency}
             onChange={(e) => setFrequency(Number(e.target.value))}
