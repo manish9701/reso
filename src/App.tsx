@@ -50,9 +50,18 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
-      if (t && t.tagName === 'BUTTON') t.blur();
       const k = e.key.toLowerCase();
+      const editing = !!t && (
+        t.tagName === 'INPUT' ||
+        t.tagName === 'SELECT' ||
+        t.tagName === 'TEXTAREA' ||
+        (t as HTMLElement).isContentEditable
+      );
+      // Let native buttons and links retain Space/Enter activation. Global shortcuts
+      // only run when focus is on the page/canvas, not while using the interface.
+      const interactive = !!t?.closest('button, a, [role="button"], [role="slider"]');
+      if (editing) return;
+      if (interactive && k !== 'escape') return;
       if (k >= '1' && k <= '5') open(TOYS[parseInt(k) - 1].id);
       else if (k === ' ') { e.preventDefault(); dock.toggle?.(); }
       else if (k === 'c') dock.clear?.();
@@ -69,10 +78,10 @@ export default function App() {
     <>
       <header className="topbar">
         <div className="logo"><span>◍</span></div>
-        <div className="brand" onClick={() => open('home')}>
+        <button type="button" className="brand brand-button" aria-label="Return to Resonance Lab home" onClick={() => open('home')}>
           <h1>RESONANCE <em>lab</em></h1>
           <p>five instruments · sound → image · WebGL + Tone.js + Paper Shaders</p>
-        </div>
+        </button>
         <div className="top-actions">
           <button className="chipbtn" aria-pressed={reduced} onClick={toggleReduced} title="Reduce motion">
             motion: {reduced ? 'soft' : 'full'}
