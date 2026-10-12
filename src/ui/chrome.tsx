@@ -27,7 +27,7 @@ export function Pill({
   title?: string;
 }) {
   return (
-    <button type="button" aria-pressed={!!active} className={`pill${active ? ' on' : ''}` onClick={onClick} title={title}>
+    <button type="button" aria-pressed={!!active} className={`pill${active ? ' on' : ''}`} onClick={onClick} title={title}>
       {children}
     </button>
   );
@@ -47,7 +47,7 @@ export function Btn({
   title?: string;
 }) {
   return (
-    <button type="button" aria-pressed={active === undefined ? undefined : active} className={`btn${warn ? ' warn' : ''}${active ? ' on' : ''}` onClick={onClick} title={title}>
+    <button type="button" aria-pressed={active === undefined ? undefined : active} className={`btn${warn ? ' warn' : ''}${active ? ' on' : ''}`} onClick={onClick} title={title}>
       {children}
     </button>
   );
