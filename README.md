@@ -1,60 +1,40 @@
-# Resonance Lab — Five Instruments for Playing with Waves
+# Cymatics — Resonant Water
 
-**Live:** https://manish9701.github.io/reso/ &nbsp;·&nbsp; run locally below.
+**Live experience:** https://manish9701.github.io/reso/
 
-Five real, playable browser instruments in one lab. React 19 + TypeScript + Vite,
-with WebGL1 fullscreen-shader rendering, Tone.js pro audio, Paper Shaders gallery
-backdrop, simplex-noise organic motion and framer-motion transitions.
+A single, fullscreen interactive cymatics-inspired water study. Move through the surface to send ripples, strike the water to create stronger wavefronts, and drag colored pigment into the current. Use a generated tone, microphone input or an audio file to drive standing-wave patterns.
 
-## Run it
+## Run locally
 
 ```bash
-cd resonance-lab
 npm install
-npm run dev      # → http://localhost:5173
-npm run build    # type-check + production build (dist/)
+npm run dev      # http://localhost:5173
+npm run build    # TypeScript check + production build
+npm run preview
 ```
 
-No accounts, no backend, no build-time network calls. All state is local;
-exported PNG/SVG files download straight from the canvas.
+## Interaction
 
-## Controls (global)
+- **Move the cursor:** create small wavefronts on the water.
+- **Click or tap:** strike the surface and release a stronger ripple.
+- **Drag:** release pigment. The pigment field is carried by the simulated wave-gradient flow, diffuses gently and refracts under the moving surface.
+- **Pigment palette:** choose lagoon, ultramarine, orchid, fuchsia, amber or pearl.
+- **Tone:** play a generated sine tone; adjust frequency to change the cymatics-like radial standing-wave mode.
+- **Mic:** explicitly grant microphone access to let nearby sound drive the water. Microphone input is analysed but not monitored back to the speakers.
+- **Load audio:** play a local audio file and use its amplitude and dominant frequency to drive the water.
+- **Clear / Save study:** reset the pigment and waves or export the current render as a PNG.
 
-| Key | Action |
-| --- | ------ |
-| `1–5` | Switch instrument |
-| `Space` | Pause / resume (freeze) |
-| `C` | Clear current toy |
-| `E` | Export current toy as PNG |
-| `Esc` | Back to gallery |
+## Rendering approach
 
-Top bar: `motion: full/soft` (reduced-motion), `sound: on/off` (master mute).
+- **WebGL 1 fragment shader:** radial wavefronts, frequency-shaped standing modes, specular highlights, refraction, reflected environment bands and restrained grain.
+- **Canvas pigment field:** a low-resolution persistent color field is advected by wave gradients and softened with a small diffusion step. It is a deliberately controlled visual simulation, not a physically exact fluid solver.
+- **Paper Shaders:** MeshGradient provides the subdued atmospheric light around the water surface; the water itself is rendered by the custom shader.
+- **Performance:** the water render target has a capped pixel dimension and the pigment simulation is intentionally low-resolution. The simulation is limited to a steady ~30 fps target.
 
-## The five toys
+## Audio and privacy
 
-1. **Resonant Ink** — tap = strike (Tone.js FM bell / sub / drone / shimmer + ripple).
-   1600 pigment particles advected by the analytic wave gradient with simplex drift;
-   WebGL layer refracts the pigment through the live field with rings, specular and
-   contour filaments. Pigment behaviours: Flow / Bloom / Edge / Dense / Glow.
-   Optional mic (explicit opt-in) stirs the field.
-2. **Harmonic Garden** — up to 6 draggable wave sources in a domain-warped WebGL
-   interference field. Contours / Interference / Filament modes, smooth preset morphs,
-   simplex drift, per-source freq/amp/phase, quiet hum monitor (sine + lowpass).
-3. **Wavelength Weaver** — Lissajous performance pen with additive glow trails.
-   Ratio picker, phase/speed dials, live morphing, second layer, entry overture,
-   gesture **record/replay**, PNG + true-vector **SVG** export.
-4. **Shadow Moiré** — two draggable plates (slide / rotate-handle / wheel-scale /
-   fling inertia), 6 procedural patterns each, screen/multiply/difference merges,
-   Lab + Print themes, capture-to-bake + downloadable print filmstrip, undo.
-5. **Sonar Fossil** — persistent 360-cell height-field; MembraneSynth thumps fire
-   soft/sharp/triple wavelets that deposit real ridges. GPU shading: slope lighting,
-   hypsometric mineral ramp, AA contours, cyan wavefront glow. Rake/erase tools,
-   8-deep undo, shaded/lines/both views.
+No microphone permission is requested on load. Microphone access begins only after the user selects **Mic**. Audio files are processed locally in the browser through the Web Audio API; no backend or file upload service is used. The selected local file is represented with a browser object URL and released when replaced or when the experience is closed.
 
-## Performance notes
+## Notes
 
-- DPR capped at 1.5–1.75 per toy; pigment layer uploads at ≤1200px; fossil field
-  uploads ~360×260 RGBA/frame.
-- Only the active toy runs a loop; WebGL contexts are released on unmount.
-- `prefers-reduced-motion` is respected on load; the motion toggle slows all clocks.
-- Audio graph is lazy (first tap) behind a limiter; mute kills the destination.
+The project contains one user-facing experience: Cymatics. The old instrument gallery and navigation are no longer part of the app entry point.
