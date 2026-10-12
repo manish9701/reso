@@ -63,7 +63,7 @@ void main() {
       float radialGrad = envelope * (k * cos(theta) - sin(theta) * decay);
       grad += (delta / dist) * radialGrad;
 
-      float radius = age * 0.39;
+      float radius = age * (omega / max(k, 1.0)) * 0.90;
       float ring = exp(-abs(dist - radius) * 105.0) * exp(-age * 1.18) * amp;
       ringLight += ring;
       ringColor += spectrum(dist * 0.34 + age * 0.035 + phase0 * 0.05) * ring;
@@ -137,8 +137,8 @@ class CymaticWater {
   height = 2;
   cssWidth = 2;
   cssHeight = 2;
-  dyeWidth = 240;
-  dyeHeight = 140;
+  dyeWidth = 200;
+  dyeHeight = 120;
   field = new Float32Array(this.dyeWidth * this.dyeHeight * 4);
   nextField = new Float32Array(this.field.length);
   pixels = new Uint8ClampedArray(this.dyeWidth * this.dyeHeight * 4);
@@ -193,8 +193,8 @@ class CymaticWater {
     this.height = H;
     this.gl.viewport(0, 0, W, H);
 
-    const nextW = 240;
-    const nextH = clamp(Math.round(nextW * this.cssHeight / this.cssWidth), 110, 205);
+    const nextW = 200;
+    const nextH = clamp(Math.round(nextW * this.cssHeight / this.cssWidth), 100, 180);
     if (nextW !== this.dyeWidth || nextH !== this.dyeHeight) {
       const old = this.field, oldW = this.dyeWidth, oldH = this.dyeHeight;
       this.dyeWidth = nextW;
@@ -541,6 +541,9 @@ export default function Cymatics() {
       const frame = (now: number) => {
         if (!engine || engine.dead) return;
         frameRef.current = requestAnimationFrame(frame);
+        // A steady 30 fps is enough for this liquid study and keeps both the
+        // CPU advection pass and the fullscreen shader within a modest budget.
+        if (now - last < 1000 / 30) return;
         const dt = Math.min(0.04, Math.max(0, (now - last) / 1000));
         last = now;
         const metrics = sound.sample();
@@ -782,7 +785,7 @@ export default function Cymatics() {
       </section>
 
       <div className="bottom-caption"><span>01 / WATER & RESONANCE</span><span>STRIKE · LISTEN · POUR · OBSERVE</span></div>
-      <audio ref={audioElRef} className="audio-element" preload="none" />
+      <audio ref={audioElRef} className="audio-element" preload="none" onEnded={() => { if (inputMode === 'file') stopAudio(); }} />
       {!hasGL && <div className="fallback-message" role="alert">{error || 'This cymatics experiment requires WebGL. Try a browser with hardware acceleration enabled.'}</div>}
     </main>
   );
