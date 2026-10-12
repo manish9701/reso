@@ -32,7 +32,7 @@ const TONES: Record<string, ToneDef> = {
 export type PigmentType = 'flow' | 'bloom' | 'edge' | 'dense' | 'glow';
 
 interface Impulse { nx: number; ny: number; amp: number; k: number; om: number; phase: number; t0: number; decay: number; col: [number, number, number] }
-interface Particle { x: number; y: number; vx: number; vy: number; s: number; a: number; c: string; tw: number }
+interface Particle { x: number; y: number; vx: number; vy: number; s: number; a: number; c: string; tw: number; life: number }
 
 const INK_FS = `
 precision highp float;
@@ -76,27 +76,47 @@ void main(){
       }
     }
   }
-  // refract the pigment layer through the wave gradient
-  vec2 off = clamp((-g * 620.0) / res, vec2(-0.08), vec2(0.08));
-  vec3 pigCol = texture2D(pig, clamp(puv + off, vec2(0.001), vec2(0.999))).rgb;
-  // deep liquid base
+  // Displace the pigment image through the actual wave slope. Sample a
+  // small neighbourhood too, so pigment boundaries catch light like wet dye.
+  vec2 texel = vec2(1.0 / res.x, 1.0 / res.y);
+  vec2 off = clamp((-g * 520.0) / res, vec2(-0.075), vec2(0.075));
+  vec2 puvD = clamp(puv + off, vec2(0.001), vec2(0.999));
+  vec3 pigCol = texture2D(pig, puvD).rgb;
+  vec3 pR = texture2D(pig, clamp(puvD + vec2(texel.x, 0.0), vec2(0.001), vec2(0.999))).rgb;
+  vec3 pL = texture2D(pig, clamp(puvD - vec2(texel.x, 0.0), vec2(0.001), vec2(0.999))).rgb;
+  vec3 pU = texture2D(pig, clamp(puvD + vec2(0.0, texel.y), vec2(0.001), vec2(0.999))).rgb;
+  vec3 pD = texture2D(pig, clamp(puvD - vec2(0.0, texel.y), vec2(0.001), vec2(0.999))).rgb;
+  float pigment = dot(pigCol, vec3(0.299, 0.587, 0.114));
+  float pigmentEdge = length(pR - pL) + length(pU - pD);
+
+  // Deep dark-water base with a slight indigo lift around the active waves.
   vec2 asp = vec2(res.x / res.y, 1.0);
   float vig0 = length((puv - 0.5) * asp);
-  vec3 base = mix(vec3(0.050, 0.066, 0.108), vec3(0.010, 0.014, 0.032), smoothstep(0.0, 0.78, vig0));
-  vec3 col = base + pigCol * 1.06;
-  // contour filaments riding the field
-  float lv = w * 9.0;
+  vec3 base = mix(vec3(0.042, 0.052, 0.092), vec3(0.006, 0.009, 0.022), smoothstep(0.0, 0.82, vig0));
+  vec3 col = base + pigCol * 1.36;
+  col = mix(col, col * vec3(1.08, 1.02, 1.16), smoothstep(0.08, 0.65, pigment));
+
+  // Fine spectral nodal lines make the acoustic pattern legible without
+  // turning the whole surface into a neon wireframe.
+  float lv = w * 8.0;
   float f = abs(fract(lv + 0.5) - 0.5);
-  float fil = 1.0 - smoothstep(0.0, 0.16, f);
-  col += vec3(0.55, 0.90, 1.0) * fil * 0.20 * min(1.0, abs(w) * 3.0 + 0.22);
-  // expanding rings + glowing cores
-  col += rings * 0.9 + cores * 0.9;
-  // soft specular from surface slope
-  float spec = pow(clamp(1.0 - length(g) * 20.0, 0.0, 1.0), 3.0);
-  col += vec3(0.85, 0.95, 1.0) * spec * 0.10;
-  // vignette + animated grain
-  col *= 1.0 - smoothstep(0.42, 1.05, vig0) * 0.55;
-  col += (hash(frag + fract(time) * 61.7) - 0.5) * 0.032;
+  float fil = 1.0 - smoothstep(0.018, 0.105, f);
+  vec3 spectrum = 0.52 + 0.48 * cos(6.28318 * (w * 0.16 + vec3(0.02, 0.34, 0.68)));
+  col += spectrum * fil * 0.14 * min(1.0, abs(w) * 2.4 + 0.18);
+
+  // Wet boundaries catch a thin pearl highlight; broad color stays in the pigment.
+  float edgeLight = smoothstep(0.08, 0.36, pigmentEdge) * smoothstep(0.025, 0.22, pigment);
+  col += mix(vec3(0.34, 0.76, 0.91), vec3(0.94, 0.72, 1.0), 0.5 + 0.5 * sin(w * 2.7)) * edgeLight * 0.34;
+
+  // Expanding cymatic rings and source cores.
+  col += rings * 0.72 + cores * 0.76;
+  float slope = length(g);
+  float spec = pow(smoothstep(0.025, 0.34, slope), 1.6) * (1.0 - smoothstep(0.8, 1.8, slope));
+  col += vec3(0.76, 0.90, 1.0) * spec * 0.11;
+
+  // Vignette + restrained static film grain (not temporally flickering noise).
+  col *= 1.0 - smoothstep(0.42, 1.05, vig0) * 0.46;
+  col += (hash(frag) - 0.5) * 0.012;
   gl_FragColor = vec4(col, 1.0);
 }
 `;
@@ -157,14 +177,10 @@ class InkEngine {
   }
 
   seedParticles() {
+    // The liquid should begin quiet. Pigment particles are emitted only where
+    // the user strikes or pours, so the material feels caused by the gesture
+    // rather than like a pre-seeded particle screensaver.
     this.parts = [];
-    for (let i = 0; i < 1600; i++) {
-      this.parts.push({
-        x: Math.random(), y: Math.random(), vx: 0, vy: 0,
-        s: 0.6 + Math.random() * 1.9, a: 0.22 + Math.random() * 0.6,
-        c: HUES[i % HUES.length], tw: Math.random() * TAU,
-      });
-    }
   }
 
   resize(cw: number, ch: number) {
@@ -209,11 +225,11 @@ class InkEngine {
     return { w, gx, gy };
   }
 
-  strike(nx: number, ny: number, freqMul = 1, ampMul = 1) {
+  strike(nx: number, ny: number, freqMul = 1, ampMul = 1, playSound = true) {
     if (this.frozen || this.dead) return;
     const T = TONES[this.toneName];
     const color = HUES[this.hueIdx % HUES.length];
-    void Audio.ensureAudio().then(() => Audio.strike(T.kind, T.freq * freqMul * (0.98 + Math.random() * 0.04)));
+    if (playSound) void Audio.ensureAudio().then(() => Audio.strike(T.kind, T.freq * freqMul * (0.98 + Math.random() * 0.04))).catch(() => {});
     this.impulses.push({
       nx, ny, amp: T.amp * ampMul * (0.9 + Math.random() * 0.2),
       k: T.k * this.CW * (0.9 + Math.random() * 0.2), // rad per full stage width
@@ -238,24 +254,101 @@ class InkEngine {
   deposit(sx: number, sy: number, color: string, type: PigmentType, mult: number) {
     this.drops++;
     const px = this.px;
+    const baseR = (type === 'dense' ? 44 : type === 'bloom' ? 74 : 56) * mult * (this.PW / 900 + 0.5);
+    const blobCount = type === 'dense' ? 3 : type === 'bloom' ? 6 : 4;
+    const seed = this.drops * 0.173 + sx * 0.013 + sy * 0.019;
+    const noise = this.noise;
+
+    // Build a connected stain from layered organic silhouettes instead of
+    // independent soft dots. The uneven boundary is what makes it read as
+    // pigment rather than particles.
     px.save();
     px.globalCompositeOperation = type === 'glow' ? 'lighter' : 'source-over';
-    const R = (type === 'dense' ? 26 : type === 'bloom' ? 64 : 44) * mult * (this.PW / 900 + 0.5);
-    const n = type === 'bloom' ? 26 : type === 'dense' ? 42 : 18;
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * TAU, r = Math.pow(Math.random(), 0.6) * R;
-      const x = sx + Math.cos(a) * r, y = sy + Math.sin(a) * r * 0.9;
-      const rr = (type === 'dense' ? 2 + Math.random() * 5 : type === 'glow' ? 6 + Math.random() * 14 : 3 + Math.random() * 9);
-      const g = px.createRadialGradient(x, y, 0, x, y, rr * 2.4);
-      g.addColorStop(0, color);
-      g.addColorStop(1, color + '00');
-      px.globalAlpha = type === 'dense' ? 0.5 : type === 'glow' ? 0.32 : 0.3;
-      px.fillStyle = g;
-      px.beginPath(); px.arc(x, y, rr * 2.4, 0, TAU); px.fill();
+    for (let b = 0; b < blobCount; b++) {
+      const angle = b * 2.399 + seed;
+      const spread = b === 0 ? 0 : baseR * (0.18 + Math.random() * 0.45);
+      const cx = sx + Math.cos(angle) * spread;
+      const cy = sy + Math.sin(angle) * spread * 0.78;
+      const radius = baseR * (b === 0 ? 1.0 : 0.30 + Math.random() * 0.42);
+      const grad = px.createRadialGradient(cx - radius * 0.18, cy - radius * 0.22, radius * 0.02, cx, cy, radius * 1.2);
+      grad.addColorStop(0, color + (type === 'dense' ? 'dd' : type === 'glow' ? 'c8' : 'a8'));
+      grad.addColorStop(0.48, color + (type === 'dense' ? '92' : '65'));
+      grad.addColorStop(1, color + '00');
+
+      const points: Array<[number, number]> = [];
+      const count = 34;
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * TAU;
+        const n = noise(Math.cos(a) * 2.1 + seed + b * 0.71, Math.sin(a) * 2.1 - seed * 0.5);
+        const ripple = 0.78 + n * (type === 'bloom' ? 0.30 : 0.18) + Math.sin(a * 5 + seed) * 0.055;
+        points.push([cx + Math.cos(a) * radius * ripple, cy + Math.sin(a) * radius * ripple * 0.76]);
+      }
+      px.beginPath();
+      px.moveTo((points[0][0] + points[1][0]) * 0.5, (points[0][1] + points[1][1]) * 0.5);
+      for (let i = 1; i <= count; i++) {
+        const p = points[i % count];
+        const q = points[(i + 1) % count];
+        px.quadraticCurveTo(p[0], p[1], (p[0] + q[0]) * 0.5, (p[1] + q[1]) * 0.5);
+      }
+      px.closePath();
+      px.fillStyle = grad;
+      px.globalAlpha = type === 'dense' ? 0.66 : type === 'glow' ? 0.48 : 0.72;
+      px.fill();
+
+      // Thin tide-lines around selected blooms create a deposited edge.
+      if (type === 'edge' || type === 'bloom') {
+        px.globalAlpha = type === 'edge' ? 0.34 : 0.15;
+        px.strokeStyle = color;
+        px.lineWidth = Math.max(0.6, this.PW / 1500);
+        px.stroke();
+      }
+    }
+
+    // A few tapered filaments follow the direction of the strike. They make
+    // color feel drawn into the wave instead of sprayed evenly in a circle.
+    if (type === 'flow' || type === 'bloom' || type === 'edge') {
+      const filamentCount = type === 'flow' ? 11 : 6;
+      for (let i = 0; i < filamentCount; i++) {
+        const a = seed + (i / filamentCount) * TAU;
+        const len = baseR * (0.65 + Math.random() * (type === 'flow' ? 1.9 : 1.1));
+        const bend = (noise(i * 0.27 + seed, seed * 0.7) * 0.55) * len;
+        px.globalAlpha = type === 'edge' ? 0.22 : 0.18;
+        px.strokeStyle = color;
+        px.lineWidth = Math.max(0.6, baseR * (0.018 + Math.random() * 0.025));
+        px.beginPath();
+        px.moveTo(sx, sy);
+        px.quadraticCurveTo(
+          sx + Math.cos(a) * len * 0.45 + Math.cos(a + Math.PI / 2) * bend,
+          sy + Math.sin(a) * len * 0.45 + Math.sin(a + Math.PI / 2) * bend,
+          sx + Math.cos(a) * len,
+          sy + Math.sin(a) * len * 0.76,
+        );
+        px.stroke();
+      }
     }
     px.restore();
-  }
 
+    // Emit moving pigment only around the user's action. These particles are
+    // advected by the wave gradient, fade naturally, and remain bounded.
+    const count = Math.round((type === 'dense' ? 42 : type === 'bloom' ? 56 : 38) * Math.min(1.3, mult));
+    const maxParts = 2600;
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * TAU;
+      const r = Math.sqrt(Math.random()) * baseR;
+      this.parts.push({
+        x: clamp((sx + Math.cos(a) * r) / this.PW, 0, 1),
+        y: clamp((sy + Math.sin(a) * r * 0.78) / this.PH, 0, 1),
+        vx: Math.cos(a) * (0.025 + Math.random() * 0.055) * mult,
+        vy: Math.sin(a) * (0.025 + Math.random() * 0.055) * mult,
+        s: 0.65 + Math.random() * 2.2,
+        a: 0.20 + Math.random() * 0.48,
+        c: color,
+        tw: Math.random() * TAU,
+        life: (type === 'dense' ? 2.2 : type === 'flow' ? 5.4 : 4.0) + Math.random() * 2.8,
+      });
+    }
+    if (this.parts.length > maxParts) this.parts.splice(0, this.parts.length - maxParts);
+  }
   step(dt: number, reduced: boolean) {
     if (this.frozen || this.dead) return;
     this.time += reduced ? dt * 0.35 : dt;
@@ -284,9 +377,12 @@ class InkEngine {
     px.fillRect(0, 0, this.PW, this.PH);
     px.restore();
 
-    // advect + draw particles (normalized coords)
+    // Advect the deposited pigment through the wave field. Lifetimes keep the
+    // material expressive without letting a long session become unbounded.
     const n2 = this.noise;
+    this.parts = this.parts.filter((p) => p.life > 0);
     for (const p of this.parts) {
+      p.life -= dt;
       const { w, gx, gy } = this.waveAt(p.x, p.y);
       const sc = 1 / Math.max(this.PW, this.PH);
       p.vx += -gx * 9000 * sc * dt * 0.5 - p.vx * 1.7 * dt + n2(p.x * 3, t * 0.25 + p.tw) * 0.012;
@@ -297,7 +393,7 @@ class InkEngine {
       if (p.y < 0 || p.y > 1) { p.vy *= -1; p.y = clamp(p.y, 0, 1); }
 
       const X = p.x * this.PW, Y = p.y * this.PH;
-      let alpha = p.a * 0.5, sz = p.s;
+      let alpha = p.a * 0.62 * clamp(p.life / 1.1, 0, 1), sz = p.s;
       if (this.pigType === 'edge') {
         if (Math.abs(w) < 0.12) { alpha *= 1.1; sz *= 0.8; }
         else alpha *= 0.12;
@@ -393,8 +489,8 @@ export default function Ink() {
     if (!e.gl) setNoGL(true);
     const stage = cv.parentElement!;
     e.resize(stage.clientWidth, stage.clientHeight);
-    const t1 = setTimeout(() => { if (e.drops === 0 && !e.dead) { e.strike(0.38, 0.44); } }, 400);
-    const t2 = setTimeout(() => { if (!e.dead) e.strike(0.62, 0.56, 1.5); }, 1000);
+    const t1 = setTimeout(() => { if (e.drops === 0 && !e.dead) { e.strike(0.38, 0.44, 1, 1, false); } }, 400);
+    const t2 = setTimeout(() => { if (!e.dead) e.strike(0.62, 0.56, 1.5, 1, false); }, 1000);
     const hint = setTimeout(() => setHintGone(true), 8000);
     const stat = setInterval(() => {
       setStats(`${e.impulses.length} waves · ${e.drops} pours${e.micOn ? (e.micLevel > 0.14 ? ' · ● mic' : ' · ○ mic') : ''}`);
