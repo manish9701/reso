@@ -97,16 +97,15 @@ export interface CymaticMode {
 /**
  * The slider drives REAL resonance frequencies, in Hz, of the actual vessel.
  *
- * This used to remap the physical 0.6–7.5 Hz band logarithmically onto a fake
- * 60–900 Hz "audible" band, which meant every frequency the UI displayed was
- * wrong by ~100× and — worse — the whole slider spanned barely one or two real
- * modes. Sliding it wandered between near-degenerate neighbours instead of
- * walking the spectrum.
+ * This used to remap the physical band logarithmically onto a fake 60–900 Hz
+ * "audible" range, which meant every frequency the UI displayed was wrong by
+ * ~100× and the slider spanned barely one or two real modes.
  *
- * The capillary–gravity dispersion below is honest physics; there is now no
- * invented mapping on top of it. The visible band is derived from the mode
- * bank itself (see BANKS below), so the slider always covers exactly the
- * resonances the vessel actually has.
+ * There is deliberately no mapping function here any more: the displayed
+ * number IS the vessel's actual resonance. The slider's endpoints are derived
+ * from the mode bank itself (see BANK_FREQ_MIN/MAX), so the control always
+ * covers exactly the resonances this vessel has and every step lands on a
+ * genuinely distinct mode.
  */
 /** Physical frequency of a mode, straight from the dispersion relation. */
 function modeFreq(k: number): number {
@@ -136,6 +135,7 @@ function buildBank(b: Boundary): CymaticMode[] {
       if (m === 0 && n > 4) continue;
       const z = zeroAt(T, m, n, derivative);
       const k = z / VESSEL.radius;
+      // Straight from the dispersion relation — no remapping.
       bank.push({ m, n, k, freq: modeFreq(k) });
     }
   }
