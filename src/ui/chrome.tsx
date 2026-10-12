@@ -27,7 +27,7 @@ export function Pill({
   title?: string;
 }) {
   return (
-    <button className={`pill${active ? ' on' : ''}`} onClick={onClick} title={title}>
+    <button type="button" aria-pressed={!!active} className={`pill${active ? ' on' : ''}` onClick={onClick} title={title}>
       {children}
     </button>
   );
@@ -47,7 +47,7 @@ export function Btn({
   title?: string;
 }) {
   return (
-    <button className={`btn${warn ? ' warn' : ''}${active ? ' on' : ''}`} onClick={onClick} title={title}>
+    <button type="button" aria-pressed={active === undefined ? undefined : active} className={`btn${warn ? ' warn' : ''}${active ? ' on' : ''}` onClick={onClick} title={title}>
       {children}
     </button>
   );
@@ -73,9 +73,10 @@ export function Slider({
   onChange: (v: number) => void;
 }) {
   return (
-    <span className="slider">
+    <label className="slider">
       <span className="slider-label">{label}</span>
       <input
+        aria-label={label}
         type="range"
         style={{ width }}
         min={min}
@@ -85,7 +86,7 @@ export function Slider({
         onChange={(e) => onChange(parseFloat(e.target.value))}
       />
       <span className="val">{format ? format(value) : value.toFixed(2)}</span>
-    </span>
+    </label>
   );
 }
 
@@ -102,6 +103,7 @@ export function Dots({
     <span className="dots">
       {colors.map((c, i) => (
         <button
+          type="button"
           key={c + i}
           className={`dot${i === index ? ' on' : ''}`}
           style={{ background: c }}
