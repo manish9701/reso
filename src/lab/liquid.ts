@@ -230,12 +230,10 @@ varying float vH;`,
   float hU = (texture2D(uField, luv + vec2(0.0, e.y)).r + texture2D(uField, luv + vec2(0.0, uTexel.y)).r) * 0.5;
   vec2 gradUv = vec2(hR - hL, hU - hD) * 0.5 / e.x; // ∂h/∂uv
   vec2 slope = gradUv * uAmp * uNormalGain / (2.0 * uR);
-  // a real surface has a physical slope limit; clamping keeps a strong
-  // optical gain from tipping the surface past vertical into CG-looking facets
-  // A real surface has a physical slope limit. Clamping it also stops a steep
-    // crest from catching a whole softbox in one flat patch — which is what
-    // turns water into hard-edged white and tan blobs.
-    slope = clamp(slope, vec2(-0.55), vec2(0.55));
+  // Smoothly compress extreme gradients instead of hard-clamping them. Hard
+  // clipping leaves broad patches with identical normals, which read as flat
+  // pale polygons when the environment is reflected by the transmission pass.
+  slope = slope / (1.0 + max(abs(slope.x), abs(slope.y)) * 0.85);
 
   // Fine secondary ripple detail (guide §6.5) — a supporting layer only.
   // The epsilon must be SMALLER than the noise's own wavelength (1/34 ≈
@@ -340,8 +338,10 @@ diffuseColor.rgb = uWater;`,
   // range. The gain below is calibrated against that scale — set it an order of
   // magnitude too high and every crest clips to solid white, which reads as
   // grey blobs floating on the surface rather than as focused light.
-  float caustic = pow(clamp(-lapn * uCausticK, 0.0, 1.0), 1.2);
-  totalEmissiveRadiance += vec3(1.0, 0.99, 0.95) * caustic * uCaustics * (1.0 - cover * 0.45);
+  float caustic = pow(clamp(-lapn * uCausticK, 0.0, 1.0), 1.35);
+  // Caustics are a delicate refracted-light cue, not a second white pattern.
+  // Keep the contribution under control to retain pigment and mode contrast.
+  totalEmissiveRadiance += vec3(1.0, 0.99, 0.95) * caustic * uCaustics * (1.0 - cover * 0.55) * 0.65;
   // nodal map (debug): bright lines where the raw modal shape crosses zero
   float node = exp(-abs(texture2D(uField, luvE).g) * 11.0);
   totalEmissiveRadiance += vec3(0.16, 0.42, 0.85) * node * uNodal * 0.55;
