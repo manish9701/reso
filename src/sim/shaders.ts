@@ -275,6 +275,20 @@ vec4 sampleDisc(sampler2D tex, vec2 uv) {
 }
 
 /**
+ * Value noise, used as the stream-function potential for the ambient
+ * turbulence. Cheaper than gradient noise and perfectly adequate here: its
+ * curl is what matters, and value noise still produces the multi-scale,
+ * divergence-free folding that shreds pigment into filaments.
+ */
+float dhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(dhash(i), dhash(i + vec2(1.0, 0.0)), u.x),
+             mix(dhash(i + vec2(0.0, 1.0)), dhash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+/**
  * Pigment field: rgb = per-channel OPTICAL DENSITY (absorbance), a = mass.
  * Ink mixes SUBTRACTIVELY and correctly because absorbance adds linearly —
  * blue over yellow transmits blue·green (green), exactly as real pigment
@@ -324,21 +338,39 @@ void main() {
                          fU.g * fU.g - fD.g * fD.g);
   flow -= uGather * gradShape2 * 64.0;
 
-  // ambient stir: analytic curl of two drifting wave trains. Amplitude
-  // tracks the drive, so a higher tone visibly churns the water faster.
+  // ---- ambient turbulence: multi-octave curl noise --------------------
+  // This is what makes pigment look like a real fluid rather than a few
+  // smooth lobes.
+  //
+  // The previous version was the curl of two smooth sinusoidal wave trains.
+  // Those are perfectly coherent, so they advected pigment into clean, large,
+  // unbranched shapes — the dish filled with a handful of big blobs and the
+  // rest stayed bare. Real cymatics ink is the opposite: fine, chaotic,
+  // branching filaments, because it is stirred by broadband turbulence at
+  // every scale.
+  //
+  // So the stream function is now sum-of-octaves noise. Each octave is a
+  // DIFFERENT spatial frequency, and the curl of a sum of octaves is still
+  // divergence-free (so pigment is stirred and folded, never created or
+  // destroyed) but carries detail down to the finest scale — which is what
+  // shreds blobs into filaments.
   {
     float t = uTime;
-    vec2 q = (vUv - 0.5) * 6.2831853;
-    float k1 = 1.7, k2 = 2.9;
-    // psi = sin(k1 qx + a t) cos(k2 qy + b t) + 0.6 sin(k3 qx + c t) sin(k4 qy + d t)
-    float p1 = sin(k1 * q.x + 0.9 * t) * cos(k2 * q.y - 0.7 * t);
-    float p1y = sin(k1 * q.x + 0.9 * t) * -sin(k2 * q.y - 0.7 * t) * k2;
-    float p1x = cos(k1 * q.x + 0.9 * t) * k1 * cos(k2 * q.y - 0.7 * t);
-    float k3 = 4.3, k4 = 5.1;
-    float p2 = 0.6 * sin(k3 * q.x - 1.3 * t) * sin(k4 * q.y + 0.4 * t);
-    float p2y = 0.6 * sin(k3 * q.x - 1.3 * t) * cos(k4 * q.y + 0.4 * t) * k4;
-    float p2x = 0.6 * cos(k3 * q.x - 1.3 * t) * k3 * sin(k4 * q.y + 0.4 * t);
-    flow += uStir * vec2(p1y + p2y, -(p1x + p2x));
+    vec2 p = vUv * 6.0;
+    float psi = 0.0;
+    // three octaves, amplitude falling as frequency rises
+    psi += 1.00 * vnoise(p * 1.00 + vec2(0.00, t * 0.20));
+    psi += 0.55 * vnoise(p * 2.30 + vec2(t * 0.13, 0.70));
+    psi += 0.30 * vnoise(p * 5.10 + vec2(0.40, -t * 0.27));
+    // curl of the potential = (dψ/dy, -dψ/dx), by central difference
+    float e = 0.012;
+    float psiY = vnoise((p + vec2(0.0, e * 6.0)) * 1.00 + vec2(0.00, t * 0.20))
+               + 0.55 * vnoise((p + vec2(0.0, e * 6.0)) * 2.30 + vec2(t * 0.13, 0.70))
+               + 0.30 * vnoise((p + vec2(0.0, e * 6.0)) * 5.10 + vec2(0.40, -t * 0.27));
+    float psiX = vnoise((p + vec2(e * 6.0, 0.0)) * 1.00 + vec2(0.00, t * 0.20))
+               + 0.55 * vnoise((p + vec2(e * 6.0, 0.0)) * 2.30 + vec2(t * 0.13, 0.70))
+               + 0.30 * vnoise((p + vec2(e * 6.0, 0.0)) * 5.10 + vec2(0.40, -t * 0.27));
+    flow += uStir * vec2((psiY - psi) / e, -(psiX - psi) / e) * 0.06;
   }
 
   // transport must stay bounded: a strike spike cannot eject pigment

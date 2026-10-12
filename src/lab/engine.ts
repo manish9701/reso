@@ -264,7 +264,12 @@ export class LabEngine {
       y: v,
       // A drop that has fallen spreads wider than it was, and wider than a
       // brush dab: it is a volume of liquid dispersing into water.
-      radius: radius * 2.6,
+      // A fallen drop disperses, but not uniformly: the pigment core stays dense
+      // and only its edge feathers out. The old 2.6x spread thinned every drop
+      // until nothing in the dish ever reached full saturation (measured at
+      // 0% of pixels vs the reference's 11%). Deposit a concentrated core with
+      // a modest halo so dense colour actually exists.
+      radius: radius * 1.55,
       amount: volume,
       absorbance,
     });
@@ -353,8 +358,14 @@ export class LabEngine {
     // 5. pigment transport through the same flow
     // The ambient churn tracks the tone: higher frequency visibly agitates
     // the water faster, so frequency is felt as well as seen.
-    const stir = (0.0004 + Math.min(1, Math.log2(Math.max(40, this.drive.freq) / 60) / 4.2) * 0.0022
-      + Math.min(1, this.drive.level) * 0.0014) * (0.4 + this.sim.visc);
+    // Ambient churn. Measured against the reference: that dish is covered in ink
+    // edge to edge with dense fine filaments, while this one showed a handful
+    // of large smooth lobes surrounded by bare steel. The churn is what breaks
+    // pigment into that fine structure — it was reduced earlier to stop
+    // dilution, but with the absorbances now high enough to survive mixing,
+    // the fine detail is worth the slight spread.
+    const stir = (0.0009 + Math.min(1, Math.log2(Math.max(1, this.drive.freq) / 2) / 3.4) * 0.0042
+      + Math.min(1, this.drive.level) * 0.0026) * (0.4 + this.sim.visc);
     this.pigment.step(r, dt, {
       // gather is the stream-function coefficient: it scales |∂φ/∂xy|, so it
       // must stay small or the surface churns and the ink dilutes to haze
@@ -362,17 +373,27 @@ export class LabEngine {
       // to dominate the curl transport: if the swirling flow wins, pigment
       // circulates as a soft cloud and no nodal filament ever forms, which is
       // exactly what the reference plate does not look like.
-      gather: this.gather * 4.5,
+      gather: this.gather * 4.5 * 1.15,
       // a small diffusion FLOOR is not cosmetic: it is what suppresses the
       // texel-level noise that advection + unsharp would otherwise amplify
       // into rainbow speckle across the whole surface
-      diffusion: Math.max(0.006, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
-      relax: 0.998 + this.sim.persist * 0.00195,
+      // Diffusion floor lowered. Every texel of diffusion bleeds absorbance out of
+      // the filaments, so the floor is an upper bound on how saturated the
+      // dish can ever look. A small floor still suppresses the rainbow speckle
+      // that advection would otherwise amplify.
+      diffusion: Math.max(0.0035, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
+      // Pigment persists longer: real ink in water does not fade in seconds,
+      // and a short relax guarantees the dish washes out before it develops.
+      relax: 0.9993 + this.sim.persist * 0.00068,
       // Curl transport, kept deliberately below the gather term above: this is
       // what folds and stretches the filaments once they have formed, and it
       // must not be strong enough to smear them away again.
-      flow: 0.006,
-      swirl: 0.011,
+      // Curl transport raised. This is what folds a smooth blob into the wandering
+      // filaments the reference shows. It must stay under the nodal gather or
+      // it smears the figure away, but it needs to be strong enough to actually
+      // tear pigment apart.
+      flow: 0.016,
+      swirl: 0.028,
       stir,
       sharpen: 0.22,
       time: this.time,

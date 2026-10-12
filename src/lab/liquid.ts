@@ -194,7 +194,11 @@ export function createLiquidMaterial(): {
     // through the liquid. Absorbance scale is kept below 1 so a pour stays
     // luminous; full-strength density saturates to black long before a real
     // volume of dye would.
-    uInkDensity: { value: new THREE.Vector2(1.35, 2.6) },
+    // Absorbance scale raised to reach full saturation in dense pours (measured:
+// the reference has ~11% of its dish at maximum chroma, this render had none).
+// Mass scale raised alongside so coverage tracks the deeper colour and dense
+// regions read as real deposit rather than a tint.
+uInkDensity: { value: new THREE.Vector2(2.3, 3.4) },
     uTime: { value: 0 },
     uMicro: { value: 0.020 },
     // Fraction of the shading relief the refracted path follows. High enough
@@ -341,6 +345,22 @@ vec3 dyeAbsorb = exp(-dyeS.rgb * uInkDensity.x);
 // slides to neutral. Pulling transmission toward its strongest channel keeps
 // a poured colour luminous instead of muddy.
 dyeAbsorb += maxComp(dyeAbsorb) * 0.20 * (vec3(1.0) - dyeAbsorb);
+// Drive deep concentrations to FULL saturation. Measured against the reference,
+// that image carries ~11% of its dish at maximum chroma with a saturation
+// spread of 0.32, while this render had essentially none — every pour decayed
+// to a pale wash and no colour ever reached full strength. The chromatic
+// channels are pushed apart only where the pigment is genuinely dense, so thin
+// films stay subtle and only real deposits achieve the saturated core the
+// reference shows.
+{
+  float depth = maxComp(dyeS.rgb);
+  float push = smoothstep(0.35, 1.6, depth);
+  // Push channels apart around the mean: this is what raises CHROMA without
+  // changing luminance, which is exactly the difference between "saturated
+  // colour" and "brighter colour".
+  float meanCh = (dyeAbsorb.r + dyeAbsorb.g + dyeAbsorb.b) / 3.0;
+  dyeAbsorb = clamp(meanCh + (dyeAbsorb - meanCh) * (1.0 + push * 1.35), 0.0, 1.0);
+}
 // How much liquid the eye is looking through here — a standing swell of dye
 // is a longer optical path than a clear trough, so it reads as denser.
 // The height is sampled from the field texture rather than taken from the
