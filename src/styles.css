@@ -25,7 +25,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   position: relative; isolation: isolate; width: 100%; height: 100%; min-height: 480px;
   overflow: hidden; background: #05080e;
 }
-.paper-backdrop { position: absolute; inset: 0; z-index: -3; opacity: 0.76; }
+.paper-backdrop { position: absolute; inset: 0; z-index: -3; opacity: 0.94; }
 .paper-backdrop canvas { width: 100%; height: 100%; display: block; }
 .paper-backdrop::after {
   content: ""; position: absolute; inset: 0;
@@ -37,8 +37,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   background-size: 180px 180px;
 }
 .water-pond {
-  position: absolute; z-index: -1; inset: 14px 14px 14px; overflow: hidden;
-  border-radius: 25px; border: 1px solid rgba(207, 231, 246, 0.22);
+  position: absolute; z-index: -1; inset: 28px 30px 26px; overflow: hidden;
+  border-radius: 26px; border: 1px solid rgba(207, 231, 246, 0.24);
   background: #050a13;
   box-shadow:
     0 20px 85px rgba(0, 0, 0, 0.46),
@@ -62,30 +62,30 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 .instrument-mark {
-  position: absolute; z-index: 5; top: 34px; left: 39px; display: flex; align-items: center; gap: 13px;
+  position: absolute; z-index: 5; top: 43px; left: 54px; display: flex; align-items: center; gap: 11px;
   pointer-events: none; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.38));
 }
 .mark-symbol {
-  width: 34px; height: 34px; position: relative; display: grid; place-items: center;
-  border-radius: 50%; border: 1px solid rgba(189, 232, 239, 0.47);
-  box-shadow: inset 0 0 12px rgba(94, 212, 213, 0.08), 0 0 25px rgba(93, 218, 218, 0.08);
+  width: 30px; height: 30px; position: relative; display: grid; place-items: center;
+  border-radius: 50%; border: 0;
+  box-shadow: none;
 }
 .mark-symbol::before, .mark-symbol::after, .mark-symbol span {
   content: ""; position: absolute; border: 1px solid rgba(160, 230, 229, 0.85); border-radius: 50%;
 }
-.mark-symbol::before { width: 23px; height: 15px; transform: rotate(35deg); }
-.mark-symbol::after { width: 15px; height: 23px; transform: rotate(35deg); }
+.mark-symbol::before { width: 23px; height: 15px; transform: rotate(35deg); opacity: .85; }
+.mark-symbol::after { width: 15px; height: 23px; transform: rotate(35deg); opacity: .55; }
 .mark-symbol span { width: 4px; height: 4px; background: #e4ffff; box-shadow: 0 0 9px #7df2eb; }
-.instrument-mark .eyebrow { margin: 0 0 4px; color: #91a5b4; font-size: 8px; letter-spacing: 0.26em; font-weight: 750; }
-.instrument-mark h1 { margin: 0; color: #eaf7fa; font-size: 17px; letter-spacing: 0.22em; font-weight: 720; line-height: 1; }
+.instrument-mark .eyebrow { margin: 0 0 5px; color: #a8b9c4; font-size: 9px; letter-spacing: 0.20em; font-weight: 650; }
+.instrument-mark h1 { margin: 0; color: #f0fbff; font-size: 20px; letter-spacing: 0.15em; font-weight: 650; line-height: 1; }
 .instrument-mark h1 span { color: #607582; font-weight: 400; margin: 0 2px; }
 .instrument-mark h1 em { color: #8de5df; font-family: Georgia, serif; font-size: 15px; font-weight: 400; font-style: italic; letter-spacing: 0; }
-.instrument-mark .submark { margin: 5px 0 0; color: #788b9b; font-size: 9px; letter-spacing: 0.10em; }
+.instrument-mark .submark { margin: 6px 0 0; color: #90a4b1; font-size: 10px; letter-spacing: 0.08em; }
 
 .signal-status {
-  position: absolute; z-index: 5; top: 37px; right: 40px; display: flex; align-items: center; gap: 9px;
-  color: #94a9b7; font-size: 8px; font-weight: 750; letter-spacing: 0.17em;
-  padding: 9px 11px; border: 1px solid rgba(183, 216, 230, 0.16); border-radius: 999px;
+  position: absolute; z-index: 5; top: 43px; right: 54px; display: flex; align-items: center; gap: 10px;
+  color: #b1c2cc; font-size: 9px; font-weight: 650; letter-spacing: 0.13em;
+  padding: 10px 13px; border: 1px solid rgba(183, 216, 230, 0.16); border-radius: 999px;
   background: rgba(5, 12, 21, 0.40); backdrop-filter: blur(14px); pointer-events: none;
 }
 .status-dot { width: 5px; height: 5px; border-radius: 50%; background: #647b8b; }
@@ -95,9 +95,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 @keyframes pulse-status { 0%,100% { opacity: .65; } 50% { opacity: 1; } }
 
 .interaction-hint {
-  position: absolute; z-index: 5; left: 50%; top: 26px; transform: translateX(-50%);
-  max-width: min(490px, 38vw); text-align: center; color: rgba(186, 208, 220, 0.62);
-  font-size: 10px; line-height: 1.5; letter-spacing: 0.025em; pointer-events: none;
+  position: absolute; z-index: 5; left: 50%; top: 38px; transform: translateX(-50%);
+  max-width: min(450px, 34vw); text-align: center; color: rgba(204, 220, 228, 0.78);
+  font-size: 11px; line-height: 1.55; letter-spacing: 0.015em; pointer-events: none;
   text-shadow: 0 1px 9px rgba(0,0,0,0.8);
 }
 .error-toast {
@@ -114,18 +114,18 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .audio-element { display: none; }
 
 .control-dock {
-  position: absolute; z-index: 10; left: 50%; bottom: 40px; transform: translateX(-50%);
-  width: min(1080px, calc(100vw - 78px)); min-height: 84px; display: flex; align-items: center; gap: 20px;
-  padding: 15px 16px; border: 1px solid rgba(200, 224, 236, 0.2); border-radius: 17px;
-  background: linear-gradient(135deg, rgba(10, 19, 31, 0.83), rgba(8, 13, 24, 0.72));
-  box-shadow: 0 18px 58px rgba(0, 0, 0, 0.34), inset 0 1px rgba(255,255,255,0.055);
-  backdrop-filter: blur(22px) saturate(125%);
+  position: absolute; z-index: 10; left: 50%; bottom: 43px; transform: translateX(-50%);
+  width: min(1160px, calc(100vw - 112px)); min-height: 88px; display: flex; align-items: center; gap: 24px;
+  padding: 17px 20px; border: 1px solid rgba(200, 224, 236, 0.23); border-radius: 20px;
+  background: linear-gradient(135deg, rgba(8, 16, 26, 0.84), rgba(7, 11, 20, 0.78));
+  box-shadow: 0 22px 68px rgba(0, 0, 0, 0.4), inset 0 1px rgba(255,255,255,0.07);
+  backdrop-filter: blur(24px) saturate(135%);
 }
 .dock-section { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
-.dock-label { color: #7f94a4; font-size: 7.5px; font-weight: 800; letter-spacing: 0.18em; white-space: nowrap; }
-.pigment-palette { display: flex; align-items: center; gap: 8px; }
+.dock-label { color: #9aafbb; font-size: 9px; font-weight: 700; letter-spacing: 0.15em; white-space: nowrap; }
+.pigment-palette { display: flex; align-items: center; gap: 10px; }
 .pigment-swatch {
-  --swatch: #55ead9; width: 21px; height: 21px; border: 1px solid color-mix(in srgb, var(--swatch) 62%, white 12%);
+  --swatch: #55ead9; width: 24px; height: 24px; border: 1px solid color-mix(in srgb, var(--swatch) 62%, white 12%);
   background: radial-gradient(circle at 31% 26%, rgba(255,255,255,0.84), transparent 25%), radial-gradient(circle at 35% 30%, var(--swatch), color-mix(in srgb, var(--swatch) 65%, black));
   box-shadow: 0 0 11px color-mix(in srgb, var(--swatch) 25%, transparent);
   border-radius: 50%; padding: 0; cursor: pointer; transition: transform 140ms, box-shadow 140ms; flex: none;
@@ -136,9 +136,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .sound-buttons { display: flex; align-items: center; gap: 5px; }
 .control-button {
   position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-height: 34px; padding: 0 10px; color: #bacbd4; white-space: nowrap;
+  min-height: 38px; padding: 0 12px; color: #c6d4dc; white-space: nowrap;
   border: 1px solid rgba(179, 205, 222, 0.14); border-radius: 9px; background: rgba(209, 231, 242, 0.045);
-  cursor: pointer; font-size: 10px; font-weight: 650; transition: background 150ms, border-color 150ms, color 150ms;
+  cursor: pointer; font-size: 11px; font-weight: 600; transition: background 150ms, border-color 150ms, color 150ms;
 }
 .control-button:hover { color: #f1fbff; border-color: rgba(172, 230, 238, 0.36); background: rgba(156, 219, 233, 0.08); }
 .control-button.active { color: #b6fff1; border-color: rgba(112, 235, 218, 0.55); background: rgba(65, 194, 178, 0.12); }
@@ -164,9 +164,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .icon-button:hover { background: rgba(236, 247, 252, 0.1); }
 
 .bottom-caption {
-  position: absolute; z-index: 5; left: 40px; right: 40px; bottom: 17px;
+  position: absolute; z-index: 5; left: 54px; right: 54px; bottom: 15px;
   display: flex; justify-content: space-between; gap: 16px; color: rgba(132, 156, 171, 0.62);
-  font-size: 7.5px; letter-spacing: 0.18em; font-weight: 750; pointer-events: none;
+  font-size: 9px; letter-spacing: 0.14em; font-weight: 650; pointer-events: none;
 }
 @media (max-width: 1120px) {
   .control-dock { width: calc(100vw - 48px); gap: 13px; }
@@ -179,17 +179,17 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 @media (max-width: 820px) {
   .cymatics-app { min-height: 560px; }
-  .water-pond { inset: 8px; border-radius: 18px; }
-  .instrument-mark { top: 22px; left: 22px; gap: 9px; }
-  .mark-symbol { width: 29px; height: 29px; }
-  .instrument-mark h1 { font-size: 14px; }
-  .instrument-mark .eyebrow { font-size: 7px; }
-  .instrument-mark .submark { font-size: 8px; }
-  .signal-status { top: 23px; right: 20px; gap: 7px; padding: 7px 8px; font-size: 7px; }
+  .water-pond { inset: 10px; border-radius: 18px; }
+  .instrument-mark { top: 22px; left: 22px; gap: 8px; }
+  .mark-symbol { width: 25px; height: 25px; }
+  .instrument-mark h1 { font-size: 15px; }
+  .instrument-mark .eyebrow { font-size: 8px; }
+  .instrument-mark .submark { font-size: 9px; }
+  .signal-status { top: 23px; right: 20px; gap: 7px; padding: 8px 9px; font-size: 8px; }
   .signal-track { width: 34px; }
-  .interaction-hint { top: 77px; max-width: calc(100vw - 52px); font-size: 9px; }
+   .interaction-hint { top: 78px; max-width: calc(100vw - 52px); font-size: 10px; }
   .control-dock {
-    bottom: 28px; width: calc(100vw - 28px); gap: 10px; padding: 12px;
+    bottom: 28px; width: calc(100vw - 28px); gap: 12px; padding: 13px;
     display: grid; grid-template-columns: auto 1fr auto; align-items: center;
   }
   .pigment-section { grid-column: 1; }
