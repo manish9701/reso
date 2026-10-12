@@ -26,11 +26,17 @@ import type { ModeSlot } from './resonance';
 export const FIGURE_SIZE = 512;
 const MAX_MODES = 6;
 
-/** Peaks that actually reach the surface; slots beyond this are dropped.
- *  Kept modest — the standing figure should be a gentle swell you read
- *  through reflection and pigment, not a high-contrast mask that clips to
- *  black and white once the normal is lit hard. */
-export const FIGURE_GAIN = 1.15;
+/**
+ * Peaks that actually reach the surface; slots beyond this are dropped.
+ *
+ * Normalised for mode count on purpose. Six superposed modes accumulate a
+ * field several times larger than the old two-mode sum, and a fixed gain then
+ * drives the surface so far past a physical slope that it stops reading as
+ * liquid and becomes hard light/dark wedges. Dividing by sqrt(nModes) keeps the
+ * TOTAL relief roughly constant as more modes are added, so extra modes buy
+ * finer interfering detail instead of simply more amplitude.
+ */
+export const FIGURE_GAIN = 0.62;
 
 export class FigureField {
   readonly size = FIGURE_SIZE;

@@ -50,7 +50,7 @@ export interface LiquidUniforms {
  *  ripples and the standing relief read as a continuous surface rather
  *  than a faceted polygon — the silhouette against the dish wall is what
  *  gives the water away if it is too coarse. */
-export function createLiquidGeometry(radius = LIQUID_R, rings = 200, segments = 288): THREE.BufferGeometry {
+export function createLiquidGeometry(radius = LIQUID_R, rings = 320, segments = 384): THREE.BufferGeometry {
   const positions = new Float32Array((rings + 1) * segments * 3);
   const normals = new Float32Array((rings + 1) * segments * 3);
   const index: number[] = [];
@@ -130,18 +130,34 @@ export function createLiquidMaterial(): {
     // Displacement stays within a couple of mesh ring-spacings (past that the
     // surface folds and renders as hard wedges). Real cymatic relief is
     // millimetres deep; the figure is read from reflection and pigment.
-    uAmp: { value: 0.042 },
+    // Geometric displacement, in world units, for a unit of field height.
+    // This must stay within roughly ONE ring spacing of the polar mesh or the
+    // surface folds over itself and each triangle becomes its own facet: with
+    // 320 rings over r≈0.87 a spacing is ~0.0027, and a displacement several
+    // times that is what produced hard radial spokes through the refracted
+    // image. The figure is read through the shading normal and caustics, not
+    // through silhouette, so a small real displacement is correct here.
+    uAmp: { value: 0.016 },
     // Optical normal gain lifts the shading slope to a legible level without
     // tipping the surface past vertical. With the studio's vertical gradient
     // this is where a crest reads as a bright swell and a trough as soft shade;
     // much higher and the same relief turns to hard chrome.
-    uNormalGain: { value: 8.5 },
+    // Optical normal gain. With the geometric displacement kept small (above),
+    // this is what actually makes the figure legible: it amplifies the field's
+    // slope into the shading normal without touching the mesh, so relief reads
+    // in the reflections with no faceting.
+    //
+    // Six superposed modes push this much harder than the old two-mode field
+    // did — the summed gradient is several times larger — so the gain comes
+    // DOWN from 15. Too high and the surface stops reading as liquid and turns
+    // into hard light/dark wedges with no reflection in between.
+    uNormalGain: { value: 6.0 },
     // Clear shallow water over polished steel. Too dark a body and the liquid
     // reads as an opaque tinted disc; too white and it clips under the studio.
     // This sits just below the steel floor so pigment and caustics read.
     uWater: { value: new THREE.Vector3(0.62, 0.70, 0.78) },
     uCaustics: { value: 1 },
-    uCausticK: { value: 3.6e-7 },
+    uCausticK: { value: 6.2e-7 },
     uDepth: { value: 1 },
     uNodal: { value: 0 },
     uRefract: { value: 0.006 },
@@ -164,7 +180,13 @@ export function createLiquidMaterial(): {
     // and exits. Refraction (ior 1.33) is what bends the polished steel bowl
     // seen through the surface — the single strongest "this is water" cue, and
     // the one an opaque surface can never produce.
-    transmission: 1,
+    //
+    // Kept below 1 deliberately. At full transmission the refracted ray swings
+    // far on every ripple, misses the bowl entirely and samples the dark studio
+    // surround instead — which is what painted hard black wedges across the
+    // surface. A partial transmission keeps a fraction of the shading normal's
+    // own response, so those regions still read as water with pigment in it.
+    transmission: 0.62,
     thickness: LIQUID_THICKNESS,
     ior: 1.333,
     // Water itself is nearly colourless; this is the faint cool cast over a
@@ -235,7 +257,10 @@ varying float vH;`,
   // A real surface has a physical slope limit. Clamping it also stops a steep
     // crest from catching a whole softbox in one flat patch — which is what
     // turns water into hard-edged white and tan blobs.
-    slope = clamp(slope, vec2(-0.55), vec2(0.55));
+    // A real water surface cannot stand much past ~30° without breaking up.
+    // This clamp is what keeps a strong optical gain from tipping whole lobes
+    // past vertical, where they stop reflecting and become flat dark wedges.
+    slope = clamp(slope, vec2(-0.34), vec2(0.34));
 
   // Fine secondary ripple detail (guide §6.5) — a supporting layer only.
   // The epsilon must be SMALLER than the noise's own wavelength (1/34 ≈
@@ -245,7 +270,10 @@ varying float vH;`,
   float n0 = vnoise(luv * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
   float nx = vnoise((luv + vec2(epsN, 0.0)) * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
   float ny = vnoise((luv + vec2(0.0, epsN)) * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
-  slope += vec2(nx - n0, ny - n0) / epsN * uMicro * 0.004;
+  // Scaled down from the old value: the six-mode figure already supplies fine
+  // structure, and this high-frequency noise is what turns the dye refraction
+  // into coloured speckle.
+  slope += vec2(nx - n0, ny - n0) / epsN * uMicro * 0.0018;
 
   vec3 nObj = normalize(vec3(-slope.x, 1.0, -slope.y));
   // meniscus: the surface leans inward where it climbs the basin wall
@@ -263,14 +291,20 @@ vec2 luvC = vLuv;
 // refraction: the ink layer shifts with the surface normal (guide §6.3)
 vec2 dyeUv = clamp(luvC + vec2(0.0), vec2(0.001), vec2(0.999));
 {
-  float hL = texture2D(uField, luvC - vec2(uTexel.x, 0.0)).r;
-  float hR = texture2D(uField, luvC + vec2(uTexel.x, 0.0)).r;
-  float hD = texture2D(uField, luvC - vec2(0.0, uTexel.y)).r;
-  float hU = texture2D(uField, luvC + vec2(0.0, uTexel.y)).r;
-  vec2 g = vec2(hR - hL, hU - hD) * 0.5 / uTexel.x;
-  // clamp the refraction offset: an unbounded shift on a steep crest samples
-  // across the ink and produces rainbow speckle
-  g = clamp(g, vec2(-0.8), vec2(0.8));
+  // Same wide, averaged stencil as the shading normal. A 1-texel difference
+  // measures texel-level jitter in a six-mode field, and since each dye
+  // channel is offset by a slightly different amount, the result is not grain
+  // but COLOURED speckle — rainbow dashes scattered over the whole surface.
+  vec2 re = uTexel * 2.0;
+  float hL = (texture2D(uField, luvC - vec2(re.x, 0.0)).r + texture2D(uField, luvC - vec2(uTexel.x, 0.0)).r) * 0.5;
+  float hR = (texture2D(uField, luvC + vec2(re.x, 0.0)).r + texture2D(uField, luvC + vec2(uTexel.x, 0.0)).r) * 0.5;
+  float hD = (texture2D(uField, luvC - vec2(0.0, re.y)).r + texture2D(uField, luvC - vec2(0.0, uTexel.y)).r) * 0.5;
+  float hU = (texture2D(uField, luvC + vec2(0.0, re.y)).r + texture2D(uField, luvC + vec2(0.0, uTexel.y)).r) * 0.5;
+  vec2 g = vec2(hR - hL, hU - hD) * 0.5 / re.x;
+  // Clamp hard. The dye is a high-frequency 1024² field while the gradient is
+  // estimated at 512², so even a modest offset walks across many texels of ink
+  // and tears the filament into dashes. A small offset reads as gentle bending.
+  g = clamp(g, vec2(-0.28), vec2(0.28));
   dyeUv = clamp(luvC - g * uRefract, vec2(0.001), vec2(0.999));
 }
 vec4 dyeS = texture2D(uDye, dyeUv);
@@ -355,6 +389,30 @@ diffuseColor.rgb = uWater;`,
       .replace(
         '#include <transmission_fragment>',
         /* glsl */ `#include <transmission_fragment>
+// The single most important correction in this file.
+//
+// three.js refracts using the SHADING normal, which here carries the whole
+// cymatic relief. On a strongly rippled surface that ray swings far enough to
+// miss the bowl entirely and sample the dark studio surround — the hard black
+// wedges that kept appearing across the surface no matter how the gains were
+// tuned. Real water in a shallow dish barely bends what is directly beneath
+// it: the light path is short and the surface is near-horizontal.
+//
+// So the refraction is done against a DELIBERATELY FLAT normal. The relief
+// still drives the shading normal above (which is what makes the figure read
+// in the reflections) and still drives the caustics — only the transmitted
+// light path is calmed down, which is both closer to physical reality for a
+// shallow pool and the thing that keeps the bowl visible through the water.
+{
+  vec3 flatN = normalize(transformNormalByInverseViewMatrix(vec3(0.0, 0.0, 1.0), viewMatrix));
+  vec3 wp = vWorldPosition;
+  vec3 vv = normalize(cameraPosition - wp);
+  vec4 calm = getIBLVolumeRefraction(
+    flatN, vv, material.roughness, material.diffuseContribution, material.specularColorBlended,
+    material.specularF90, wp, modelMatrix, viewMatrix, projectionMatrix, material.dispersion,
+    material.ior, material.thickness, material.attenuationColor, material.attenuationDistance);
+  totalDiffuse = mix(totalDiffuse, calm.rgb, material.transmission);
+}
 totalDiffuse *= dyeAbsorb;
 // A dense pour also scatters light back out of the liquid, which is why real
 // ink in water is luminous rather than a flat cutout — and why a drop of

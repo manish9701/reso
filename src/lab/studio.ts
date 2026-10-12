@@ -61,7 +61,7 @@ function buildEnvironment(pmrem: THREE.PMREMGenerator): THREE.Texture {
   // turns the vessel into white ceramic (exactly the failure the first
   // tuning pass produced). The walls are kept near-charcoal; the strips,
   // softbox and copper kickers burn bright above them and draw the rim.
-  env.add(panel(40, 40, new THREE.Color(0.16, 0.165, 0.175), [0, 12, 0], [0, 0, 0]));
+  env.add(panel(40, 40, new THREE.Color(0.34, 0.345, 0.36), [0, 12, 0], [0, 0, 0]));
 
   // overhead softbox — the long bright sweep along the rim, and the key the
   // standing figure reflects. Kept OFF the camera's axis: a mirror-smooth bowl
@@ -82,7 +82,11 @@ function buildEnvironment(pmrem: THREE.PMREMGenerator): THREE.Texture {
   env.add(panel(4.5, 0.7, new THREE.Color(1.2, 1.7, 3.0), [-3.2, 0.45, -5.2], [0, 0.4, 0]));
   // floor bounce: mid-grey — bright enough that downward tilts still read as
   // liquid, dark enough that the dish foot and lower wall keep contrast
-  env.add(panel(24, 24, new THREE.Color(0.30, 0.30, 0.32), [0, -0.05, 0], [0, 1, 0]));
+  // Floor bounce. This is the surface the bowl's INNER WALL sees, so its level
+  // sets how bright the dish interior reads — which is what you look at
+  // through the water. Too dark and the whole basin goes grey-black behind the
+  // pigment; too bright and the polished metal loses its contrast entirely.
+  env.add(panel(24, 24, new THREE.Color(0.62, 0.62, 0.64), [0, -0.05, 0], [0, 1, 0]));
 
   const rt = pmrem.fromScene(env, 0.03);
   env.traverse((o) => {

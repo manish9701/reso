@@ -292,16 +292,21 @@ export class LabEngine {
     this.pigment.step(r, dt, {
       // gather is the stream-function coefficient: it scales |∂φ/∂xy|, so it
       // must stay small or the surface churns and the ink dilutes to haze
-      // Calibrated so a pour visibly migrates toward the nodal filaments
-      // within a few seconds — the Chladni drift the whole piece is about.
-      gather: this.gather * 0.045,
+      // Chladni migration, the term that actually DRAWS the figure. This has
+      // to dominate the curl transport: if the swirling flow wins, pigment
+      // circulates as a soft cloud and no nodal filament ever forms, which is
+      // exactly what the reference plate does not look like.
+      gather: this.gather * 0.16,
       // a small diffusion FLOOR is not cosmetic: it is what suppresses the
       // texel-level noise that advection + unsharp would otherwise amplify
       // into rainbow speckle across the whole surface
       diffusion: Math.max(0.006, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
       relax: 0.998 + this.sim.persist * 0.00195,
-      flow: 0.014,
-      swirl: 0.026,
+      // Curl transport, kept deliberately below the gather term above: this is
+      // what folds and stretches the filaments once they have formed, and it
+      // must not be strong enough to smear them away again.
+      flow: 0.006,
+      swirl: 0.011,
       stir,
       sharpen: 0.22,
       time: this.time,

@@ -26,7 +26,7 @@ export interface ModeSlot {
 /** log-frequency bandwidth of a mode's response, in ln(f) units.
  *  Narrow enough that a tuned tone lights up 1–3 neighbouring modes —
  *  the figure reads as a pattern, not as interference soup. */
-const BASE_BW = 0.085;
+const BASE_BW = 0.155;
 
 export class ResonanceModel {
   boundary: Boundary = 'rigid';
@@ -85,12 +85,17 @@ export class ResonanceModel {
       if (Math.abs(amp) > 0.01) slots.push({ m: mode.m, kR: mode.k * VESSEL.radius, amp });
     }
     slots.sort((a, b) => Math.abs(b.amp) - Math.abs(a.amp));
-    // Keep the dominant mode and only neighbours within 45% of its
-    // amplitude. Equal-weight superposition of four modes reads as mush;
-    // one dominant figure plus a hint of its neighbours reads as cymatics.
+    // Keep the dominant mode and neighbours within 45% of its amplitude.
+    //
+    // This used to slice(0, 2) — the dominant mode plus exactly one
+    // neighbour. That produces a single clean rosette and nothing else, but
+    // real cymatics are the SUPERPOSITION of several modes at once: the fine
+    // beating and cross-hatched filaments that fill a real plate only exist
+    // when 4-6 modes of comparable amplitude are allowed to interfere. Two
+    // modes cannot make that pattern at any amplitude.
     const top = Math.abs(slots[0]?.amp ?? 0);
     const kept = slots.filter((s) => Math.abs(s.amp) > top * 0.45);
-    return kept.slice(0, 2);
+    return kept.slice(0, 6);
   }
 
   /** Dominant mode name for diagnostics / debug overlay. */

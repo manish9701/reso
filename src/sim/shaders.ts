@@ -136,12 +136,19 @@ void main() {
   if (mask <= 0.0) { gl_FragColor = vec4(0.0); return; }
   float th = atan(c.y, c.x);
   float h = 0.0;
+  // Count the live modes so the sum can be normalised. Superposing N modes
+  // accumulates ~N times the amplitude of one; without this, adding modes
+  // (which is what makes the figure interesting) simply drives the surface
+  // harder and harder until it clips into hard-edged wedges.
+  float live = 0.0;
+  for (int i = 0; i < 6; i++) live += step(1e-5, abs(uModes[i].z));
   for (int i = 0; i < 6; i++) {
     vec4 M = uModes[i];
     if (abs(M.z) < 1e-5) continue;
     int m = int(M.x + 0.5);
     h += M.z * besselJ(m, M.y * r) * cos(M.x * th);
   }
+  h /= sqrt(max(live, 1.0));
   // single coherent breathing envelope: the figure stays lit and shimmers
   // instead of strobing through zero every cycle (documented in README)
   float env = 0.78 + 0.22 * sin(uModes[0].w);
@@ -357,7 +364,21 @@ void main() {
         + sampleDisc(uDye, back + vec2(uTexel.x, -uTexel.y))
         + sampleDisc(uDye, back + vec2(-uTexel.x, uTexel.y)));
     b /= 16.0;
-    dye = max(dye + (dye - b) * uSharpen, vec4(0.0));
+    // Sharpen the MASS channel, not each absorbance channel independently.
+    //
+    // Advection leaves slightly different texel jitter in each of the three
+    // absorbance channels. Sharpening them separately amplifies those
+    // differences independently, and because the renderer reads each channel
+    // as a different colour filter, the result is not grain but COLOURED
+    // speckle — rainbow dashes over the whole surface. Sharpening the shared
+    // mass restores filament edges while leaving the hue ratio intact, which
+    // is exactly what the mask is meant to do.
+    float massNow = dye.a;
+    float massBlur = b.a;
+    float sharpenedMass = max(massNow + (massNow - massBlur) * uSharpen, 0.0);
+    vec3 ratio = massNow > 1e-4 ? dye.rgb / massNow : vec3(0.0);
+    dye.rgb = ratio * sharpenedMass;
+    dye.a = sharpenedMass;
   }
   dye = mix(dye, sampleDisc(uDye, vUv), uDiffusion);
 
