@@ -119,7 +119,14 @@ await page.screenshot({ path: path.join(OUT, 'rt-3-pigment.png') });
 // Real Hz: these are actual resonances of the vessel, not a mapped UI band.
 const modeSignatures = new Set();
 for (const hz of [1.7, 2.4, 3.4, 4.5, 5.8, 8.4]) {
-  await page.evaluate((f) => { window.__lab.forcedDrive = { freq: f, level: 0.85 }; }, hz);
+  await page.evaluate((f) => {
+    const e = window.__lab;
+    // Each sample starts from a clean resonance state. Otherwise the previous
+    // frequency's slowly decaying modes contaminate the next signature and
+    // the test can pass even when the new frequency hasn't selected a new mode.
+    e.resonance.reset();
+    e.forcedDrive = { freq: f, level: 0.85 };
+  }, hz);
   await wait(3000);
   const m = await page.evaluate(() => window.__lab.figure.slots.map((s) => `m${s.m}@${s.kR.toFixed(1)}`).join(','));
   console.log(`${hz} Hz -> ${m}`);
