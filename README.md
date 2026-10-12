@@ -136,3 +136,12 @@ than grain.
   documented shallow-flow model, not Navier–Stokes.
 - WebGL2 + `EXT_color_buffer_float` required; a calm explanation shows
   otherwise. Verified in Chrome (desktop + software rendering).
+
+
+## Visual fidelity correction (Oct 2026)
+
+The reference screenshot was reviewed against the live implementation. The first visible failure was not simply insufficient quality: hard-clamped surface normals and a large refraction offset exposed the transmission buffer as pale polygon shards. This branch reduces the liquid normal gain, smoothly compresses extreme gradients, softens caustic energy and lowers the screen-space pigment refraction offset. It also tightens the modal response so the frequency control selects one dominant pattern instead of blending a broad set of modes.
+
+The steel remains a true metallic lathed mesh. Its studio reflection field now uses darker flags and more controlled strip/softbox energy, while the camera gives the dish slightly more room to become the visual hero. These are rendering corrections, not a claim of laboratory-calibrated hydrodynamics.
+
+**QA requirement before merging:** run the app at a fixed frequency, verify the clean unpigmented mode is crisp at 60, 120, 220, 432, 600 and 900 Hz, then test pigment placement and cursor strikes. Inspect the resulting browser screenshot, not only the production build. Reject any version where the liquid becomes a pale geometric patch, metal washes to white plastic, or color sits as a static painted overlay.
