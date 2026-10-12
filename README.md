@@ -1,6 +1,6 @@
 # Cymatics — Resonant Water
 
-**Live experience:** https://manish9701.github.io/reso/
+**Expected hosted URL after Pages is enabled:** https://manish9701.github.io/reso/
 
 A single, fullscreen interactive cymatics-inspired water study. Move through the surface to send ripples, strike the water to create stronger wavefronts, and drag colored pigment into the current. Use a generated tone, microphone input or an audio file to drive standing-wave patterns.
 
@@ -34,6 +34,10 @@ npm run preview
 ## Audio and privacy
 
 No microphone permission is requested on load. Microphone access begins only after the user selects **Mic**. Audio files are processed locally in the browser through the Web Audio API; no backend or file upload service is used. The selected local file is represented with a browser object URL and released when replaced or when the experience is closed.
+
+## Deploy to GitHub Pages
+
+The repository's deployment workflow builds successfully, but the latest deploy attempt returned a 404 because GitHub Pages is not currently enabled/configured for Actions. In repository **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**. Then rerun the **Deploy to GitHub Pages** workflow from the Actions tab.
 
 ## Notes
 
