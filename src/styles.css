@@ -110,6 +110,67 @@ body { margin: 0; font-family: var(--sans); color: var(--ink); background: var(-
 .swatch.dropper input[type='color'] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: none; padding: 0; }
 .swatch.dropper:hover { transform: scale(1.06); box-shadow: 0 6px 18px rgba(25, 32, 45, 0.2); }
 .swatch.dropper.selected {
+  border-color: rgba(46, 98, 232, 0.45);
+}
+
+/* ---- ink picker popover ---- */
+.ink-picker {
+  position: absolute;
+  right: 58px;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 12px 10px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(28, 36, 52, 0.10);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(25, 32, 45, 0.18);
+  backdrop-filter: blur(6px);
+}
+.picker-current {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(28, 36, 52, 0.14);
+  cursor: default;
+}
+.picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 24px);
+  gap: 7px;
+}
+.picker-dot {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+.picker-dot:hover { transform: scale(1.15); }
+.picker-dot.selected { border-color: rgba(28, 36, 52, 0.55); box-shadow: 0 2px 8px rgba(25,32,45,0.25); }
+.picker-custom {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  padding: 5px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(28, 36, 52, 0.12);
+  background: #fbfbfa;
+  cursor: pointer;
+}
+.picker-custom:hover { background: #f1f2f4; }
+.picker-custom input[type='color'] {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  opacity: 0; cursor: pointer; border: none; padding: 0;
+}
+.swatch.dropper.selected {
   box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(20, 25, 35, 0.35), 0 4px 14px rgba(25, 32, 45, 0.2);
   transform: none;
 }

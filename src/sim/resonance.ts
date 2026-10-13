@@ -6,11 +6,20 @@
  *  - each mode behaves as a driven, damped oscillator: its amplitude grows
  *    toward a detuning-weighted target and decays when the drive leaves it,
  *    so a sustained tone lets a pattern emerge and stopping lets it decay;
- *  - the reconstructed pattern Σ Aᵢ·φᵢ is injected into the wave solver as
- *    a forcing field — the dynamic field is never replaced by a static image.
+ *  - the reconstructed pattern Σ Aᵢ·φᵢ is injected as an analytic forcing
+ *    field — the dynamic field is never replaced by a static image.
  *
- * What is NOT claimed: the frequency→mode mapping is an illustrative
- * calibration (documented in README), not a measured property of a real dish.
+ * Frequency-dependent structure (the core functional fix): each mode carries
+ * a DETERMINISTIC orientation phase φ(m,n) and the drive's log-frequency
+ * selectivity is sharpened, so different excitation frequencies resolve to
+ * genuinely different dominant (m, n) pairs — different angular orders give
+ * different spoke counts, different radial orders give different ring
+ * structures, and the superposition of the top 3–4 modes gives the
+ * interference filaments real plates show. The response stays smooth (modes
+ * cross-fade, never pop) and fully repeatable for the same input.
+ *
+ * What is NOT claimed: the frequency→mode mapping is the documented visual
+ * simulation band of §lab/resonance.ts, not a measured property of a dish.
  */
 import { BANKS, BANK_FREQ_MAX, BANK_FREQ_MIN, VESSEL, type Boundary, type CymaticMode } from '../lab/resonance';
 
@@ -21,12 +30,20 @@ export interface ModeSlot {
   kR: number;
   /** signed, smoothed modal amplitude (≤ ~level) */
   amp: number;
+  /** deterministic orientation of the nodal figure (radians) */
+  phase: number;
 }
 
 /** log-frequency bandwidth of a mode's response, in ln(f) units.
  *  Narrow enough that a tuned tone lights up 1–3 neighbouring modes —
- *  the figure reads as a pattern, not as interference soup. */
-const BASE_BW = 0.155;
+ *  the figure reads as a recognisable pattern, not an interference soup. */
+const BASE_BW = 0.12;
+
+/** Deterministic orientation for a mode's angular phase (repeatable). */
+function orientPhase(m: number, n: number): number {
+  const h = Math.sin(m * 127.1 + n * 311.7) * 43758.5453;
+  return (h - Math.floor(h)) * Math.PI * 2;
+}
 
 export class ResonanceModel {
   boundary: Boundary = 'rigid';
@@ -56,11 +73,9 @@ export class ResonanceModel {
    * Returns the strongest modes (max 4) for the forcing pass.
    */
   update(dt: number, freqHz: number, level: number): ModeSlot[] {
-    // Clamp to the vessel's REAL resonance range, derived from the bank. This was
-    // clamping to the old fake 60–900 band, which would now reject every real
-    // frequency this vessel actually has.
+    // Clamp to the vessel's REAL resonance range, derived from the bank.
     const f = Math.min(BANK_FREQ_MAX, Math.max(BANK_FREQ_MIN, freqHz));
-    const bw = BASE_BW + (1 - this.response) * 0.03;
+    const bw = BASE_BW + (1 - this.response) * 0.025;
     const tau = 1.25 - this.response * 0.95; // response: snappy ↔ slow build
     const k = 1 - Math.exp(-dt / Math.max(0.05, tau));
 
@@ -85,26 +100,18 @@ export class ResonanceModel {
     const slots: ModeSlot[] = [];
     for (const mode of this.bank) {
       const amp = this.amps.get(key(mode)) ?? 0;
-      if (Math.abs(amp) > 0.01) slots.push({ m: mode.m, kR: mode.k * VESSEL.radius, amp });
+      if (Math.abs(amp) > 0.01) {
+        slots.push({ m: mode.m, kR: mode.k * VESSEL.radius, amp, phase: orientPhase(mode.m, mode.n) });
+      }
     }
     slots.sort((a, b) => Math.abs(b.amp) - Math.abs(a.amp));
-    // Keep the dominant mode and neighbours within 45% of its amplitude.
-    //
-    // This used to slice(0, 2) — the dominant mode plus exactly one
-    // neighbour. That produces a single clean rosette and nothing else, but
-    // real cymatics are the SUPERPOSITION of several modes at once: the fine
-    // beating and cross-hatched filaments that fill a real plate only exist
-    // when 4-6 modes of comparable amplitude are allowed to interfere. Two
-    // modes cannot make that pattern at any amplitude.
+    // Dominant + whoever is within 62% of it, up to four. The DOMINANT mode is
+    // what names the figure (its m sets the spoke count, its n the ring
+    // count); the weaker riders add the fine beating and cross-hatching.
+    // With the sharper bandwidth above different drives resolve to different
+    // leaders, so the spectrum "goes somewhere" as the slider walks it.
     const top = Math.abs(slots[0]?.amp ?? 0);
-    const kept = slots.filter((s) => Math.abs(s.amp) > top * 0.62);
-    // Only the clearly-leading modes. Ten simultaneous modes is not 'variety', it
-    // is mush: every frequency produced the same dense interference mush because
-    // the figure shader's sqrt(n) normalisation cancels the added amplitude. A
-    // handful of dominant modes gives a clean, RECOGNISABLE pattern per
-    // frequency, and it is the dominance that changes as the slider moves -
-    // which is what makes the spectrum feel like it is going somewhere.
-    return kept.slice(0, 3);
+    return slots.filter((s) => Math.abs(s.amp) > top * 0.62).slice(0, 4);
   }
 
   /** Dominant mode name for diagnostics / debug overlay. */
@@ -127,9 +134,6 @@ function key(mode: CymaticMode): string {
 
 /** Soft detuning response: 1 on resonance, → 0 as the drive leaves the mode. */
 function resonanceWeight(fMode: number, fDrive: number, bw: number): number {
-  // Floor the drive near zero rather than at 10 Hz. Every mode of this vessel
-  // sits below 10 Hz, so a 10 Hz floor pinned all of them to the same detuning
-  // distance and flattened the response curve entirely.
   const d = Math.log(fMode / Math.max(1e-3, fDrive));
   return Math.exp(-(d / bw) * (d / bw));
 }

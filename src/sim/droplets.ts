@@ -44,10 +44,8 @@ const SURFACE_Y = 0.094;
  */
 type Phase = 'fall' | 'merge' | 'spread' | 'done';
 /** Seconds flattened on the surface before it has fully merged away. */
-const MERGE_TIME = 0.035;
+const MERGE_TIME = 0.055;
 const SPREAD_TIME = 0.32;
-/** What a drop fades toward as it dissolves - the water it joins. */
-const WATER_TINT = new THREE.Color(0.62, 0.70, 0.78);
 interface Drop {
   live: boolean;
   /** disc position, uv 0..1 */
@@ -96,13 +94,13 @@ function dropletMaterial(): THREE.MeshStandardMaterial {
     // Wet, but not a mirror. A very low roughness gives a single hard specular
     // dot that reads as a bead; a little roughness spreads it into the soft
     // elongated highlight a real drop shows against a softbox.
-    roughness: 0.16,
+    roughness: 0.13,
     metalness: 0,
-    envMapIntensity: 0.9,
+    envMapIntensity: 1.05,
     // A touch of self-lit colour so a drop still reads as coloured when it
     // passes in front of a dark part of the dish.
     emissive: new THREE.Color(0xffffff),
-    emissiveIntensity: 0.12,
+    emissiveIntensity: 0.08,
   });
 }
 
@@ -113,8 +111,6 @@ export class DropletSystem {
   private material: THREE.MeshStandardMaterial;
   private geom: THREE.IcosahedronGeometry;
   private dummy = new THREE.Object3D();
-  /** Pre-darkened instance colours so a drop's pigment reads against the sky. */
-  private tmpColor = new THREE.Color();
 
   constructor() {
     // Detail 3 gives a smooth silhouette: at detail 2 the icosahedron's facets
@@ -217,8 +213,9 @@ export class DropletSystem {
         d.z += d.vz * dt;
 
         if (d.z <= 0) {
-          // CONTACT. Deform the surface and kick a ring out from the impact,
-          // but keep the drop itself alive: it is now a spreading film.
+          // CONTACT. Kick a ring out from the impact; the drop then sinks
+          // straight into the water (merging), and its pigment trickles into
+          // the dye field separately.
           d.z = 0;
           d.phase = 'merge';
           d.phaseT = 0;
@@ -251,42 +248,54 @@ export class DropletSystem {
       const w = uvToWorld(d.x, d.y);
 
       // Shape by phase. Falling: a teardrop stretched along travel. On contact
-      // it squashes hard against the surface and spreads sideways — a lens,
-      // not a sphere — then thins away.
+      // it squashes hard against the surface, sinks INTO the water and is gone
+      // — the spreading you afterwards see is the PIGMENT carried by the dye
+      // field, not a coloured body lying on the surface.
+      //
+      // This replaces the earlier behaviour that kept a flat, fully coloured
+      // disc Sitting on top of the water through the whole 'spread' phase:
+      // users saw a separate circle of the drop's colour stranded on the
+      // surface instead of the same pigment mixing into the bath.
       let sx = d.r;
       let sy = d.r;
       let sz = d.r;
       let lift = d.z;
+      let visible = true;
 
       if (d.phase === 'fall') {
         const speed = Math.abs(d.vz);
         sy = d.r * (1 + Math.min(1.6, speed * 0.55));
         // A faster drop is a longer drop, not just a bigger one.
         sx = sz = d.r * (1 - Math.min(0.28, speed * 0.085));
-      } else {
-        const t = Math.min(1, d.phaseT / SPREAD_TIME);
-        // On contact the drop COLLAPSES INTO the surface, it does not spread
-        // across it.
-        //
-        // This previously widened the instance to over five times its radius
-        // while it was still fully opaque, so the moment a drop landed it
-        // stamped a solid coloured disc on the water and then sat there. That
-        // is not what a drop does: it is absorbed almost instantly, and the
-        // only thing that genuinely spreads afterwards is the pigment, which
-        // the dye field already handles.
-        //
-        // So the mesh now flattens fast and then shrinks away to nothing,
-        // with its colour desaturating toward the water as it goes. The spread
-        // you see is the ink, not the drop.
-        if (d.phase === 'merge') {
-          const mt = Math.min(1, d.phaseT / MERGE_TIME);
-          sy = d.r * (1 - 0.80 * mt);
-          sx = sz = d.r * (1 + 0.35 * mt);
-        } else {
-          // dissolve: shrink and flatten away
-          sy = d.r * 0.20 * (1 - t);
-          sx = sz = d.r * (1.35 - 1.25 * t);
+      } else if (d.phase === 'merge') {
+        const mt = Math.min(1, d.phaseT / MERGE_TIME);
+        // squash flat and sink below the surface
+        sy = d.r * (1 - 0.95 * mt);
+        sx = sz = d.r * (1 + 0.30 * mt);
+        // as it sinks, the body slides under the water line...
+        lift = -sy * 0.6 * mt;
+        // ...and once fully sunk the MESH disappears; only the pigment,
+        // which the dye field releases progressively, remains.
+        if (mt >= 1) {
+          visible = false;
+          this.dummy.position.set(0, -999, 0);
+          this.dummy.scale.setScalar(0);
+          this.dummy.updateMatrix();
+          this.mesh.setMatrixAt(i, this.dummy.matrix);
+          continue;
         }
+      } else if (d.phase === 'spread') {
+        // No visible body after merge — the drop has joined the water vat.
+        // Pigment release continues through onRelease below.
+        visible = false;
+      }
+
+      if (!visible) {
+        this.dummy.position.set(0, -999, 0);
+        this.dummy.scale.setScalar(0);
+        this.dummy.updateMatrix();
+        this.mesh.setMatrixAt(i, this.dummy.matrix);
+        continue;
       }
 
       this.dummy.position.set(w.x, SURFACE_Y + lift + sy * 0.5, w.z);
@@ -294,24 +303,14 @@ export class DropletSystem {
       this.dummy.rotation.set(0, 0, 0);
       this.dummy.updateMatrix();
       this.mesh.setMatrixAt(i, this.dummy.matrix);
-      // instanceColor carries the drop's real pigment, fading toward the water
-      // as it dissolves so no opaque disc is left lying on the surface
-      if (d.phase === 'fall') {
-        this.mesh.setColorAt(i, d.color);
-      } else {
-        // blend the pigment toward the water as it collapses, so the disc
-        // dissolves instead of sitting there fully saturated
-        const t = Math.min(1, d.phaseT / SPREAD_TIME);
-        this.tmpColor.copy(d.color).lerp(WATER_TINT, t * 0.85);
-        this.mesh.setColorAt(i, this.tmpColor);
-      }
+      // falling drops keep their real pigment colour
+      this.mesh.setColorAt(i, d.color);
     }
 
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
     this.mesh.count = MAX_DROPS;
-    if (!anyVisible) this.mesh.visible = false;
-    else this.mesh.visible = true;
+    this.mesh.visible = anyVisible;
   }
 
   dispose(): void {

@@ -24,11 +24,12 @@ page.on('console', (m) => { if (m.type() === 'error') console.log('[err]', m.tex
 
 // The ?drive hook makes each stop deterministic — audio autoplay in headless is
 // unreliable, and a silent tone silently invalidates the whole sweep.
-await page.goto(BASE + '?drive=4.5&level=0.85', { waitUntil: 'networkidle0' });
+// STOPS are EXCITATION frequencies (the UI slider's world); the engine maps
+// them through the documented band transform (lab/resonance.ts).
+await page.goto(BASE + '?drive=432&level=0.85', { waitUntil: 'networkidle0' });
 await sleep(3000);
 
-const STOPS = [1.7, 2.4, 3.2, 4.5, 5.8, 7.1, 8.4];
-
+const STOPS = [110, 147, 220, 294, 415, 554, 740, 880];
 for (const f of STOPS) {
   // set the drive, wait for the resonance model to settle on the new mode
   await page.evaluate((hz) => { window.__lab.forcedDrive = { freq: hz, level: 0.85 }; }, f);
@@ -47,11 +48,10 @@ for (const f of STOPS) {
   const dom = await page.evaluate(() => {
     const e = window.__lab;
     return {
-      f: Math.round(e.drive.freq),
       modes: e.figure.slots.map((s) => `m${s.m}(kR${s.kR.toFixed(1)},a${s.amp.toFixed(2)})`).join(' '),
     };
   });
   await page.screenshot({ path: `${OUT}\\sweep-${String(f).padStart(3, '0')}.png` });
-  console.log(`${String(f).padStart(3)} Hz -> ${dom.f} Hz | ${dom.modes || '(no modes)'}`);
+  console.log(`${String(f).padStart(3)} Hz excitation -> ${dom.modes || '(no modes)'}`);
 }
 await browser.close();

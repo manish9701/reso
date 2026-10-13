@@ -54,7 +54,7 @@ export interface LiquidUniforms {
  *  ripples and the standing relief read as a continuous surface rather
  *  than a faceted polygon — the silhouette against the dish wall is what
  *  gives the water away if it is too coarse. */
-export function createLiquidGeometry(radius = LIQUID_R, rings = 320, segments = 384): THREE.BufferGeometry {
+export function createLiquidGeometry(radius = LIQUID_R, rings = 256, segments = 320): THREE.BufferGeometry {
   const positions = new Float32Array((rings + 1) * segments * 3);
   const normals = new Float32Array((rings + 1) * segments * 3);
   const index: number[] = [];
@@ -164,7 +164,7 @@ export function createLiquidMaterial(): {
     // times that is what produced hard radial spokes through the refracted
     // image. The figure is read through the shading normal and caustics, not
     // through silhouette, so a small real displacement is correct here.
-    uAmp: { value: 0.016 },
+    uAmp: { value: 0.012 },
     // Optical normal gain lifts the shading slope to a legible level without
     // tipping the surface past vertical. With the studio's vertical gradient
     // this is where a crest reads as a bright swell and a trough as soft shade;
@@ -178,16 +178,17 @@ export function createLiquidMaterial(): {
     // did — the summed gradient is several times larger — so the gain comes
     // DOWN from 15. Too high and the surface stops reading as liquid and turns
     // into hard light/dark wedges with no reflection in between.
-    uNormalGain: { value: 6.0 },
-    // Clear shallow water over polished steel. Too dark a body and the liquid
-    // reads as an opaque tinted disc; too white and it clips under the studio.
-    // This sits just below the steel floor so pigment and caustics read.
-    uWater: { value: new THREE.Vector3(0.62, 0.70, 0.78) },
+    uNormalGain: { value: 5.2 },
+    // Clear shallow water over polished steel: nearly colourless, with the
+    // faint cool cast a shallow depth of clean water gives. The bowl and its
+    // colour now reach the eye THROUGH the surface instead of behind an
+    // opaque tinted disc.
+    uWater: { value: new THREE.Vector3(0.75, 0.84, 0.92) },
     uCaustics: { value: 1 },
-    uCausticK: { value: 6.2e-7 },
+    uCausticK: { value: 4.8e-7 },
     uDepth: { value: 1 },
     uNodal: { value: 0 },
-    uRefract: { value: 0.006 },
+    uRefract: { value: 0.0045 },
     // (absorbance scale, mass scale) for Beer–Lambert absorption. `mass` is now
     // the OPTICAL PATH LENGTH multiplier for pigment suspended in the water —
     // the colour is no longer painted on the surface, it is light that made it
@@ -198,15 +199,17 @@ export function createLiquidMaterial(): {
 // the reference has ~11% of its dish at maximum chroma, this render had none).
 // Mass scale raised alongside so coverage tracks the deeper colour and dense
 // regions read as real deposit rather than a tint.
-uInkDensity: { value: new THREE.Vector2(2.3, 3.4) },
+uInkDensity: { value: new THREE.Vector2(1.35, 1.8) },
     uTime: { value: 0 },
-    uMicro: { value: 0.020 },
+    uMicro: { value: 0.006 },
     // Fraction of the shading relief the refracted path follows. High enough
     // that the bowl bends WITH the ripples (one coherent water), low enough
     // that rays stay inside the vessel instead of sampling the dark studio.
-    uReliefMix: { value: 0.55 },
-    // How strongly caustic crests shadow the troughs behind them.
-    uShadowMix: { value: 1 },
+    uReliefMix: { value: 0.42 },
+    // How strongly caustic crests shadow the troughs behind them. Deliberately
+    // below 1: a full-contrast march read as huge shaded wedges; controlled
+    // shading enriches the caustics without dominating the image.
+    uShadowMix: { value: 0.45 },
     uDebug: { value: 0 },
   };
 
@@ -223,24 +226,24 @@ uInkDensity: { value: new THREE.Vector2(2.3, 3.4) },
     // surround instead — which is what painted hard black wedges across the
     // surface. A partial transmission keeps a fraction of the shading normal's
     // own response, so those regions still read as water with pigment in it.
-    transmission: 0.62,
+    transmission: 0.65,
     thickness: LIQUID_THICKNESS,
     ior: 1.333,
     // Water itself is nearly colourless; this is the faint cool cast over a
     // long path, not the colour of the liquid.
-    attenuationColor: new THREE.Color(0.82, 0.90, 0.96),
-    attenuationDistance: 2.2,
+    attenuationColor: new THREE.Color(0.80, 0.89, 0.95),
+    attenuationDistance: 2.4,
     // Near-mirror surface so the studio's strips read as sharp highlights.
     // Not purely a look knob: three.js picks the mip level for the
     // transmission buffer FROM this roughness, so a perfectly smooth surface
     // samples the refracted image unfiltered and every ripple facet resolves
     // into a hard radial spoke. A small value dissolves that tessellation
-    // while leaving the surface reflection itself sharp.
-    roughness: 0.075,
+    // while leaving the surface reflection itself sharp. Also the mip the
+    // transmission buffer is sampled at: too coarse and the refracted image
+    // shows blocky mip-boundary seams (the straight chords seen earlier).
+    roughness: 0.055,
     metalness: 0,
-    // Lowered for the same reason: the reflected instruments were overwhelming
-    // the pigment and the figure.
-    envMapIntensity: 0.5,
+    envMapIntensity: 0.7,
     specularIntensity: 1.0,
     side: THREE.FrontSide,
   });
@@ -293,24 +296,27 @@ varying float vH;`,
     // past vertical, where they stop reflecting and become flat dark wedges.
     slope = clamp(slope, vec2(-0.34), vec2(0.34));
 
-  // Fine secondary ripple detail (guide §6.5) — a supporting layer only.
-  // The epsilon must be SMALLER than the noise's own wavelength (1/34 ≈
-  // 0.03 uv): a larger offset turns the "gradient" into amplified noise,
-  // which samples into visible blocks across the whole basin.
+  // Fine secondary ripple detail (guide §6.5) — a supporting layer only, and
+  // deliberately QUIET. The epsilon must be SMALLER than the noise's own
+  // wavelength (1/34 ≈ 0.03 uv): a larger offset turns the "gradient" into
+  // amplified noise, which samples into visible blocks across the basin.
+  //
+  // Crawl suppression (this was the "groan"): the earlier version animated
+  // the noise phase every frame at full amplitude, which produced a restless
+  // crawling grain over the whole surface. The phase now moves slowly, and
+  // the amplitude is a fraction of the original — it reads as capillary
+  // sparkle instead of rolling static.
   float epsN = 0.0025;
-  float n0 = vnoise(luv * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
-  float nx = vnoise((luv + vec2(epsN, 0.0)) * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
-  float ny = vnoise((luv + vec2(0.0, epsN)) * 26.0 + vec2(uTime * 0.35, -uTime * 0.25));
-  // Scaled down from the old value: the six-mode figure already supplies fine
-  // structure, and this high-frequency noise is what turns the dye refraction
-  // into coloured speckle.
-  slope += vec2(nx - n0, ny - n0) / epsN * uMicro * 0.0018;
+  float n0 = vnoise(luv * 26.0 + vec2(uTime * 0.10, -uTime * 0.07));
+  float nx = vnoise((luv + vec2(epsN, 0.0)) * 26.0 + vec2(uTime * 0.10, -uTime * 0.07));
+  float ny = vnoise((luv + vec2(0.0, epsN)) * 26.0 + vec2(uTime * 0.10, -uTime * 0.07));
+  slope += vec2(nx - n0, ny - n0) / epsN * uMicro * 0.0007;
 
   vec3 nObj = normalize(vec3(-slope.x, 1.0, -slope.y));
   // meniscus: the surface leans inward where it climbs the basin wall
   float rr = length(luv - 0.5) * 2.0;
   vec2 rdir = normalize(luv - 0.5 + 1e-6);
-  nObj = normalize(nObj + vec3(-rdir.x, 0.0, -rdir.y) * smoothstep(0.90, 1.0, rr) * 0.5);
+  nObj = normalize(nObj + vec3(-rdir.x, 0.0, -rdir.y) * smoothstep(0.92, 1.0, rr) * 0.38);
   normal = normalize((viewMatrix * vec4(nObj, 0.0)).xyz);
 }`,
       )
@@ -347,16 +353,14 @@ vec3 dyeAbsorb = exp(-dyeS.rgb * uInkDensity.x);
 // slides to neutral. Pulling transmission toward its strongest channel keeps
 // a poured colour luminous instead of muddy.
 dyeAbsorb += maxComp(dyeAbsorb) * 0.20 * (vec3(1.0) - dyeAbsorb);
-// Drive deep concentrations to FULL saturation. Measured against the reference,
-// that image carries ~11% of its dish at maximum chroma with a saturation
-// spread of 0.32, while this render had essentially none — every pour decayed
-// to a pale wash and no colour ever reached full strength. The chromatic
-// channels are pushed apart only where the pigment is genuinely dense, so thin
-// films stay subtle and only real deposits achieve the saturated core the
-// reference shows.
+// Drive deep concentrations to chromatic, full saturation in the CORE of a
+// pour while thin films stay translucent ramps — the hard photometric cliffs
+// of exp(−A) at high density are what previously turned every deposit into a
+// flat, razor-edged blob. The chromatic channels are pushed apart only where
+// the pigment is genuinely dense.
 {
   float depth = maxComp(dyeS.rgb);
-  float push = smoothstep(0.35, 1.6, depth);
+  float push = smoothstep(0.55, 2.4, depth);
   // Push channels apart around the mean: this is what raises CHROMA without
   // changing luminance, which is exactly the difference between "saturated
   // colour" and "brighter colour".
@@ -433,7 +437,7 @@ diffuseColor.rgb = uWater;`,
       float occl = texture2D(uField, sp).r - texture2D(uField, luvE).r;
       shade += smoothstep(0.0, 0.035, occl) * (1.0 - float(s) / 6.0);
     }
-    shade = clamp(shade * 0.34 * uShadowMix, 0.0, 1.0);
+    shade = clamp(shade * 0.24 * uShadowMix, 0.0, 1.0);
     // crests are lit, troughs fall into shadow
     float shadeTerm = 1.0 - shade;
     // Scattering by settled pigment. On a real Chladni plate the bright nodal
@@ -448,7 +452,10 @@ diffuseColor.rgb = uWater;`,
     // one.
     float powder = clamp(cover * 1.4, 0.0, 1.0);
     vec3 lit = vec3(1.0, 0.99, 0.95) * caustic * uCaustics * shadeTerm;
-    lit += dyeAbsorb * powder * caustic * 1.6 * uCaustics * shadeTerm;
+    // Powder-weighted colour caustic kept subtle: at strength it paints
+    // saturated ink-shaped colour bands along the figure's crests (the dye
+    // stops reading as matter in water and starts reading as stamped shapes).
+    lit += dyeAbsorb * powder * caustic * 0.4 * uCaustics * shadeTerm;
     totalEmissiveRadiance += lit;
     // Store the shadow for the lighting stage — totalDiffuse does not exist
     // yet in this chunk, so the ambient occlusion it implies is applied after
@@ -516,11 +523,13 @@ totalDiffuse *= dyeAbsorb;
 // behind a crest receives less of everything, not just less caustic, and that
 // ambient loss is most of what makes the relief read as depth rather than as
 // a pattern drawn on a flat sheet.
-totalDiffuse *= 1.0 - gShade * 0.45;
+totalDiffuse *= 1.0 - gShade * 0.32;
 // A dense pour also scatters light back out of the liquid, which is why real
 // ink in water is luminous rather than a flat cutout — and why a drop of
-// colour is still readable where the refracted bowl behind it is dark.
-totalDiffuse += dyeScatter * uWater * 1.4;`,
+// colour is still readable where the refracted bowl behind it is dark. Kept
+// modest: a big scatter gain paints every dense region as a flat vivid disc
+// instead of letting the Beer–Lambert depth gradient carry the colour.
+totalDiffuse += dyeScatter * uWater * 0.95;`,
       )
       // ---- raw-field debug views (?debug=dye|mode|h) ---------------------
       .replace(

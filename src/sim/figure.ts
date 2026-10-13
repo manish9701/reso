@@ -25,7 +25,6 @@ import type { ModeSlot } from './resonance';
 
 export const FIGURE_SIZE = 512;
 const MAX_MODES = 4;
-
 /**
  * Peaks that actually reach the surface; slots beyond this are dropped.
  *
@@ -48,6 +47,7 @@ export class FigureField {
     this.target = makeTarget(FIGURE_SIZE, FIGURE_SIZE, THREE.HalfFloatType);
     this.pass = new FullscreenPass(FIGURE_FS, {
       uModes: { value: Array.from({ length: MAX_MODES }, () => new THREE.Vector4()) },
+      uPhase: { value: Array.from({ length: MAX_MODES }, () => 0) },
     });
 
     const prevColor = new THREE.Color();
@@ -72,10 +72,11 @@ export class FigureField {
   render(renderer: THREE.WebGLRenderer, slots: ModeSlot[], breath: number): void {
     this.slots = slots;
     const arr = this.pass.material.uniforms.uModes.value as THREE.Vector4[];
+    const phase = this.pass.material.uniforms.uPhase.value as number[];
     for (let i = 0; i < MAX_MODES; i++) {
       const s = slots[i];
-      if (s) arr[i].set(s.m, s.kR, s.amp, breath);
-      else arr[i].set(0, 0, 0, 0);
+      if (s) { arr[i].set(s.m, s.kR, s.amp, breath); phase[i] = s.phase; }
+      else { arr[i].set(0, 0, 0, 0); phase[i] = 0; }
     }
     this.pass.render(renderer, this.target);
   }

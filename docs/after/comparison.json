@@ -1,0 +1,42 @@
+{
+  "rows": [
+    {
+      "excitationHz": 110,
+      "simFreqHz": 0.84,
+      "modes": "m1@kR1.8",
+      "shot": "freq-110.png"
+    },
+    {
+      "excitationHz": 165,
+      "simFreqHz": 1.63,
+      "modes": "m0@kR3.8",
+      "shot": "freq-165.png"
+    },
+    {
+      "excitationHz": 262,
+      "simFreqHz": 3.5,
+      "modes": "m3@kR8.0, m6@kR8.4, m0@kR3.8, m1@kR8.5",
+      "shot": "freq-262.png"
+    },
+    {
+      "excitationHz": 349,
+      "simFreqHz": 5.63,
+      "modes": "m4@kR12.7, m2@kR13.2, m7@kR13.3, m0@kR13.3",
+      "shot": "freq-349.png"
+    },
+    {
+      "excitationHz": 523,
+      "simFreqHz": 10.98,
+      "modes": "m2@kR25.8, m9@kR26.0, m14@kR25.7, m4@kR25.6",
+      "shot": "freq-523.png"
+    },
+    {
+      "excitationHz": 784,
+      "simFreqHz": 21.44,
+      "modes": "m13@kR47.8, m8@kR47.2, m11@kR48.2, m10@kR46.9",
+      "shot": "freq-784.png"
+    }
+  ],
+  "fpsIdle": 6.5,
+  "fpsDye": 6.5
+}

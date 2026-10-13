@@ -127,6 +127,7 @@ export const FIGURE_FS = /* glsl */ `
 precision highp float;
 varying vec2 vUv;
 uniform vec4 uModes[4];   // x = m, y = kR, z = amplitude, w = breathing phase
+uniform float uPhase[4];  // deterministic per-mode orientation of cos(mθ+φ)
 ${BESSEL_GLSL}
 
 void main() {
@@ -146,7 +147,7 @@ void main() {
     vec4 M = uModes[i];
     if (abs(M.z) < 1e-5) continue;
     int m = int(M.x + 0.5);
-    h += M.z * besselJ(m, M.y * r) * cos(M.x * th);
+    h += M.z * besselJ(m, M.y * r) * cos(M.x * th + uPhase[i]);
   }
   h /= sqrt(max(live, 1.0));
   // single coherent breathing envelope: the figure stays lit and shimmers
@@ -387,7 +388,7 @@ void main() {
 
   // transport must stay bounded: a strike spike cannot eject pigment
   float speed = length(flow);
-  if (speed > 0.10) flow *= 0.10 / speed;
+  if (speed > 0.055) flow *= 0.055 / speed;
 
   // ---- semi-Lagrangian advection --------------------------------------
   vec2 back = discClamp(vUv - flow * uDt);

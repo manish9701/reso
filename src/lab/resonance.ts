@@ -158,6 +158,49 @@ export const BANK_FREQ_MIN = BANKS.rigid[0].freq;
 export const BANK_FREQ_MAX = BANKS.rigid[BANKS.rigid.length - 1].freq;
 
 /**
+ * FREQQUENCY MODEL (documented, honest).
+ *
+ * Two different quantities live in this app and must never be conflated:
+ *
+ *  1. The **excitation frequency** `f_ex` shown in the UI and played by the
+ *     oscillator — one audible tone in the 110–880 Hz band (≈ A2–A5).
+ *  2. The **natural resonant frequencies of the simulated dish** — the
+ *     capillary–gravity modes of the vessel, which all sit far lower
+ *     (~0.6–7.5 Hz for the documented vessel: radius 8.5 cm, 6 mm deep).
+ *
+ * A browser cannot drive the dish at its true mode frequencies, so the UI
+ * tone and the simulation are related through an explicit, documented,
+ * monotonic log-band mapping rather than any invented physical conversion:
+ *
+ *     t          = (ln f_ex − ln 110) / (ln 880 − ln 110)     ∈ [0, 1]
+ *     f_model    = f_min · (f_max / f_min)^t
+ *
+ * with f_min/f_max the extremes of the mode bank, so the slider always spans
+ * exactly the resonances the vessel has, in order. This is a *visual
+ * simulation model*, not a laboratory calibration; see README "Frequency
+ * model".
+ */
+export const EXCITATION_MIN = 110; // Hz, low A2
+export const EXCITATION_MAX = 880; // Hz, high A5
+export const EXCITATION_DEFAULT = 432; // Hz — the reference-image setting
+
+/** UI excitation (Hz) → simulated dish drive (Hz of the mode bank). */
+export function excitationToSim(fEx: number): number {
+  const t = (Math.log(Math.max(1, fEx)) - Math.log(EXCITATION_MIN))
+    / (Math.log(EXCITATION_MAX) - Math.log(EXCITATION_MIN));
+  const u = Math.min(1, Math.max(0, t));
+  return BANK_FREQ_MIN * Math.exp(u * Math.log(BANK_FREQ_MAX / BANK_FREQ_MIN));
+}
+
+/** Simulated dish drive (Hz) → UI excitation (Hz). Inverse of the above. */
+export function simToExcitation(fSim: number): number {
+  const u = Math.log(Math.max(fSim, BANK_FREQ_MIN) / BANK_FREQ_MIN)
+    / Math.log(BANK_FREQ_MAX / BANK_FREQ_MIN);
+  const u2 = Math.min(1, Math.max(0, u));
+  return EXCITATION_MIN * Math.exp(u2 * Math.log(EXCITATION_MAX / EXCITATION_MIN));
+}
+
+/**
  * Resolve the resonant response for a drive frequency against a bank:
  * nearest mode + neighbour with soft log-frequency weights (never a pop).
  */

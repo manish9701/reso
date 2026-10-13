@@ -16,8 +16,39 @@ npm run build      # TypeScript check + production build
 npm run preview    # serve dist/ at :4173
 node scripts/verify.mjs http://localhost:4173/   # real-gesture visual QA
 node scripts/verify.mjs http://localhost:5173/   # exits non-zero on any fault
-node scripts/freqsweep.mjs http://localhost:5173/  # figure at each frequency
+node scripts/freqsweep.mjs http://localhost:4173/  # figure at each frequency
+node scripts/itershoot.mjs http://localhost:4173/ docs/after  # before/after + 6-frequency comparison + detail crops
+node scripts/fpsprobe.mjs http://localhost:4173/  # headed real-GPU FPS (idle / transient / settled)
 ```
+
+## Frequency model (read this before touching the slider)
+
+Two different quantities live in this app, and they are never silently
+relabelled:
+
+1. **Excitation frequency** — the one audible tone the UI shows and plays,
+   spanning **110–880 Hz** (default **432 Hz**).
+2. **The dish's own resonant frequencies** — the capillary–gravity modes of
+   the documented vessel (8.5 cm radius, 6 mm deep), which all lie far below
+   the audible band.
+
+They are related by an explicit, documented, monotonic log-band transform
+(`src/lab/resonance.ts`):
+
+```
+t       = (ln f_ex − ln 110) / (ln 880 − ln 110)   ∈ [0, 1]
+f_model = f_min · (f_max / f_min)^t
+```
+
+with `f_min/f_max` derived from the mode bank itself, so the slider always
+spans exactly the resonances the vessel has, in order. This is a **visual
+simulation model**, not a laboratory calibration; no invented physical
+conversion is claimed anywhere. The mode bank is dense and sorted by
+frequency, so sweeping the tone walks the spectrum in order — low pitches
+resolve to a couple of broad structures, high pitches to finely divided
+rosettes — and each stop's resolved `(m, n)` fingerprint is recorded by
+`scripts/itershoot.mjs` into `docs/after/comparison.md`.
+
 
 ## Interaction
 
@@ -49,13 +80,13 @@ The field is built in three cooperating parts, each documented where it lives:
 
 | File | Responsibility |
 | --- | --- |
-| `src/lab/resonance.ts` | Mode bank. Circular-domain eigenmodes from tabulated Bessel zeros (`J′_m` for a rigid wall, `J_m` for a free edge), extended to m ≤ 11, n ≤ 9 with the standard large-argument asymptotics (A&S 9.5.12 / 11.4.9). The bank is **dense and sorted by frequency**, so sliding the tone walks the spectrum in order: low pitches give two or three big lobes, high pitches fine concentric rosettes. That ordering is the physics, not styling — in the gravity-dominated regime ω ≈ √(gk), so the wavenumber and therefore the nodal cell count grows with the square of the drive frequency. Frequencies come from the capillary–gravity dispersion ω² = (gk + σ/ρ·k³)·tanh(kh), mapped into the audible band through a documented monotonic transform. Every mode is a driven, damped oscillator; the response keeps one dominant figure plus its nearest neighbours, because four superposed modes read as mush rather than as cymatics. |
+| `src/lab/resonance.ts` | Mode bank. Circular-domain eigenmodes from tabulated Bessel zeros (`J′_m` for a rigid wall, `J_m` for a free edge), extended to m ≤ 14, n ≤ 12 with the standard large-argument asymptotics (A&S 9.5.12 / 11.4.9). The bank is **dense and sorted by frequency**, so sliding the tone walks the spectrum in order: low pitches give two or three big lobes, high pitches fine concentric rosettes. Physical mode frequencies come from the capillary–gravity dispersion ω² = (gk + σ/ρ·k³)·tanh(kh) over the documented vessel; the UI's excitation band reaches them through the documented log-band transform (see "Frequency model"). Every mode is a driven, damped oscillator with a **deterministic orientation phase**; the response keeps one dominant figure plus its nearest neighbours, because ten superposed modes read as mush rather than as cymatics. |
 | `src/sim/figure.ts` | **The resonant standing figure, synthesized analytically.** A Bessel mode `J_m(kr)·cos(mθ)` is an exact eigenfunction of the wave operator, so the settled pattern is written straight into a 512² half-float texture each frame as `h = breathing(Φ)·Σ Aᵢ·φᵢ`. This is the physics solved in closed form, not an approximation of it — and it sidesteps a real failure mode of the grid solver: a Bessel mode has nonzero spatial mean, so forcing the grid with it pumps the (undamped) zero mode and drives the field into its rails. Bounded by construction here. |
 | `src/sim/wave.ts` | **Travelling waves on the grid** — the ripple field that pointer strikes excite. Explicit update, fixed 1/480 s substep with capped catch-up, 512² RGBA16F ping-pong, circular rim (Neighbour clamp, never a torus wrap), soft wall absorption. Ripple speed ≈ 179 texels/s, so a strike ring crosses the basin in about 1.4 s. |
 | `src/sim/pigment.ts` + `DYE_FS` | Persistent 1024² half-float dye advected through the combined field. Stored as **optical density**, not colour (rgb = per-channel absorbance, a = mass) and rendered back with **Beer–Lambert** — see "Ink physics" below. Semi-Lagrangian advection with an unsharp correction (semi-Lagrangian is numerically diffusive and turns ink to smoke in a second otherwise). |
 | `src/sim/shaders.ts` | All simulation GLSL: `FIGURE_FS`, `STEP_FS`, `COMBINE_FS`, `DYE_FS`. `COMBINE_FS` sums figure + ripples into one field (r = height, g = raw nodal shape) that the surface and pigment both sample. |
-| `src/lab/dish.ts` | Vessel lathe + **brushed stainless** material (metalness 1, anisotropy for the turned grain). A metal bowl is what makes pigment read: the wall mirrors the ink back into the composition. |
-| `src/lab/studio.ts` | Procedural studio environment baked through PMREM, key/fill/rim lights, ground + contact shadow, and responsive framing. The surround carries a deliberate **vertical brightness gradient** (dark walls, bright softbox, bright floor bounce) because that gradient is what makes water read: a tilt of a couple of degrees swings the reflection between the box and the floor, so relief shows up as light and shade. A *uniformly* lit surround returns the same radiance at every orientation and the figure disappears no matter how much relief the geometry has. The dark end is a mid grey, never black — a near-black room makes every glossy trough clip to pure black and the dish reads as harsh chrome. Output goes through `OutputPass` for tone mapping and the sRGB transfer. |
+| `src/lab/dish.ts` | Vessel lathe + **brushed stainless** material: `MeshPhysicalMaterial` at **metalness 1.0**, roughness tuned inside the **0.18–0.30** window with a *generated* circumferential brushed roughness/bump map that follows the lathe (streaks along u, wrapping seamlessly), mild anisotropy for the turned grain, no clearcoat. The crown is a thick rolled lip with machined bevels; reflections wrap the real shape. |
+| `src/lab/studio.ts` | Procedural studio environment baked through PMREM — a BRIGHT white set with contrast instruments: broad softbox + strip lights (silver sweeps), narrow **charcoal flags** (dark bands that reveal curvature), warm-white and **copper kickers** (the rose toning in the reference), cool counterpoint, white floor bounce. Real **shadow-mapped key light** (PCFSoft, 2048², tuned bias/normalBias, no acne) grounds the dish on the matte ground; the baked contact-shadow sprite supplies only the tight AO core. Three `RectAreaLight` instruments (softbox, copper kicker, cool side) add the broad soft rectangle highlights. Static set ⇒ the shadow map renders once and is frozen (no shimmer, no per-frame pass). Output goes through `OutputPass` for tone mapping and the sRGB transfer. |
 | `src/lab/liquid.ts` | The surface: a `MeshPhysicalMaterial` extended via `onBeforeCompile`, keeping full PBR. Injects vertex displacement, a shading normal from the live field, Beer–Lambert ink transmission, refraction, caustics, a nodal overlay and debug views. Pigment also gets a specular kill, so dense ink is a matte film whose colour reads instead of being washed white. The shader patches are **asserted after injection** — `String#replace` against a renamed three.js chunk is a silent no-op, and the symptom is a flat, featureless disc that looks exactly like a broken physics model. |
 | `src/lab/engine.ts` | Orchestration: audio → ResonanceModel → FigureField + WaveSimulation → combine → pigment → material → studio render. Owns capture (Save). |
 
@@ -116,9 +147,14 @@ than grain.
 
 ## Honest limitations
 
+- **Two-frequency model.** The audio tone and the dish's modes are different
+  quantities, related by the documented log-band mapping (see "Frequency
+  model"). The UI states excitation; the simulation states its own modes;
+  `?drive=` (used by QA) carries the UI excitation and is mapped the same way
+  inside the engine, so nothing bypasses the model.
 - **Modal lock (temporal model).** The audio frequency selects *which* modes
   respond; the eye sees the standing pattern breathing at a sub-audible rate,
-  not the 60–900 Hz oscillation itself. A 432 Hz ripple cannot be resolved by
+  not the tens-of-Hz oscillation itself. A 432 Hz ripple cannot be resolved by
   a 512² / 480 Hz solver (it would alias), and the grid's physical ripple
   frequencies are ~1 Hz — the same reason visible-rate cymatics footage is shot
   in slow motion. This is a deliberate, documented temporal scale choice.

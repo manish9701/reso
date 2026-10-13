@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LabEngine } from './lab/engine';
 import { AudioInput } from './lab/audio';
-import { BANK_FREQ_MIN, BANK_FREQ_MAX, type Boundary } from './lab/resonance';
+import { EXCITATION_MIN, EXCITATION_MAX, EXCITATION_DEFAULT, excitationToSim, type Boundary } from './lab/resonance';
 import { clamp, hexToRgb } from './lib/utils';
 
 /**
@@ -12,48 +12,26 @@ import { clamp, hexToRgb } from './lib/utils';
  * Clicking/dragging on the water pours ink; the physics does the rest.
  */
 
-const PALETTE = ['#8a3ff2', '#2e62e8', '#35c8f0', '#f064b0', '#f5a13d', '#e9edf2'];
-const DEFAULT_INK = '#2e62e8';
 /**
- * Default drive = a real resonance of this vessel (the 3rd radial mode,
- * ≈4.5 Hz), not an arbitrary number. It sits in the middle of the bank so the
- * figure has a clear multi-lobed structure the moment the page opens.
+ * FREQUENCY MODEL (see lab/resonance.ts): the slider and the tone carry one
+ * audible EXCITATION frequency (110–880 Hz, default 432 Hz — the reference
+ * image's setting). The simulated dish's own resonances live far lower, so
+ * the engine maps this value through the documented monotonic log-band
+ * transform before it reaches the mode bank. The UI states excitation; the
+ * simulation states its own modes; the mapping between them is explicit and
+ * documented — one quantity is never silently relabelled as the other.
  */
-const DEFAULT_FREQ = 4.5;
+const PALETTE = ['#0b3fd6', '#2e62e8', '#35c8f0', '#0fa393', '#23c07a',
+  '#8a3ff2', '#6a2ce0', '#f064b0', '#e8365f', '#f5a13d', '#e8c534', '#e9edf2'];
+const DEFAULT_INK = '#2e62e8';
 /** Constant drive level — the slider is frequency only, per the spec. */
 const DRIVE_LEVEL = 0.85;
 
-/**
- * Audible pitch for a vessel resonance.
- *
- * The dish's real modes sit at 1.7–12 Hz. Human hearing starts at 20 Hz, so
- * feeding that straight to the oscillator produced sound nobody can consciously
- * hear — an infrasonic pressure you feel rather than hear, which is exactly
- * the "sound that kills your ears".
- *
- * So the tone is a LISTENING representation of the mode, not the mode itself:
- * the physics still runs at the true frequency, and the pitch is mapped onto
- * a pentatonic scale across three octaves. Pentatonic is the important choice
- * — every note the slider can reach is consonant with every other, so sweeping
- * the whole range never produces a dissonance, which a chromatic scale would
- * do constantly.
- */
-const PENTATONIC = [0, 3, 5, 7, 10];   // semitones: minor pentatonic
-const AUDIO_ROOT = 196.0;             // G3
-const NOTE_NAMES = ['C', 'D', 'E', 'G', 'A'];
-
-function noteFor(freqHz: number): { hz: number; name: string } {
-  const lo = Math.log(BANK_FREQ_MIN);
-  const hi = Math.log(BANK_FREQ_MAX);
-  const t = clamp((Math.log(freqHz) - lo) / (hi - lo), 0, 1);
-  const steps = 3 * PENTATONIC.length;
-  const idx = Math.round(t * steps);
-  const oct = Math.floor(idx / PENTATONIC.length);
-  const semi = PENTATONIC[idx % PENTATONIC.length];
-  return {
-    hz: AUDIO_ROOT * Math.pow(2, oct + semi / 12),
-    name: `${NOTE_NAMES[idx % PENTATONIC.length]}${3 + oct}`,
-  };
+/** Nearest equal-tempered note name for the excitation tone (display only). */
+function noteName(freqHz: number): string {
+  const NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+  const midi = Math.round(69 + 12 * Math.log2(Math.max(1, freqHz) / 440));
+  return `${NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
 }
 
 export default function Cymatics() {
@@ -64,16 +42,17 @@ export default function Cymatics() {
   const fileRef = useRef<HTMLInputElement>(null);
   const rafRef = useRef(0);
   const pausedRef = useRef(false);            // vibration (drive) on/off
-  const freqRef = useRef(DEFAULT_FREQ);
+  const freqRef = useRef(EXCITATION_DEFAULT);
   const ampRef = useRef(0.85);
   const pointerDown = useRef(false);
   const lastPaint = useRef({ x: 0.5, y: 0.5 });
   const lastHover = useRef(0);
   const pigmentRef = useRef(DEFAULT_INK);
 
-  const [freq, setFreq] = useState(DEFAULT_FREQ);
+  const [freq, setFreq] = useState(EXCITATION_DEFAULT);
   const [amplitude] = useState(0.85);
   const [pigment, setPigment] = useState(DEFAULT_INK);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [paused, setPaused] = useState(false);
   const [boundary] = useState<Boundary>('rigid');
   const [source, setSource] = useState<'tone' | 'mic' | 'file' | null>(null);
@@ -112,12 +91,14 @@ export default function Cymatics() {
       // live audio (when running) wins over the slider drive
       const a = audioRef.current.frame();
       if (audioRef.current.kind) {
-        engine.drive.freq = a.freq;
+        engine.drive.freq = excitationToSim(a.freq);
         engine.drive.level = Math.min(1, a.level * 1.4);
       } else {
-        // the frequency slider IS the drive: it selects which modes respond
-        // and how fast the water churns — no hidden knobs
-        engine.drive.freq = engine.forcedDrive ? engine.drive.freq : freqRef.current;
+        // The frequency slider IS the excitation: it is mapped through the
+        // documented band transform into the vessel's resonance range, which
+        // is what selects which modes respond. No hidden knobs, no relabelled
+        // quantities.
+        engine.drive.freq = engine.forcedDrive ? engine.drive.freq : excitationToSim(freqRef.current);
         engine.drive.level = pausedRef.current ? 0 : DRIVE_LEVEL * ampRef.current;
       }
       if (!pausedRef.current) engine.step(dt);
@@ -160,10 +141,10 @@ export default function Cymatics() {
   // keep the live tone in sync with the slider
   useEffect(() => {
     freqRef.current = freq;
-    // The oscillator gets the AUDIBLE pitch; the simulation keeps the true
-    // resonance. Driving the speaker at 4.5 Hz is not music, it is infrasound.
-    if (source === 'tone') void audioRef.current.startTone(noteFor(freq).hz, amplitude);
-    else audioRef.current.setTone(noteFor(freq).hz, amplitude);
+    // The oscillator plays the EXCITATION tone the UI shows (110–880 Hz is
+    // directly audible); the simulation receives the mapped drive band.
+    if (source === 'tone') void audioRef.current.startTone(freq, amplitude);
+    else audioRef.current.setTone(freq, amplitude);
   }, [freq, amplitude, source]);
   useEffect(() => { ampRef.current = amplitude; }, [amplitude]);
   useEffect(() => { pigmentRef.current = pigment; }, [pigment]);
@@ -246,9 +227,9 @@ export default function Cymatics() {
     if (source === kind) { audio.stop(); setSource(null); setMessage('Input released. The surface settles.'); return; }
     try {
       if (kind === 'tone') {
-        await audio.startTone(noteFor(freqRef.current).hz, amplitude);
+        await audio.startTone(freqRef.current, amplitude);
         setSource('tone');
-        setMessage('Tone driving. Slide frequency — the figure snaps between resonances.');
+        setMessage('Tone driving. Slide frequency — the figure reorganises between resonances.');
       } else if (kind === 'mic') {
         const ok = await audio.startMic();
         if (ok) { setSource('mic'); setMessage('Listening — sustained sound builds the mode. Never played back.'); }
@@ -290,22 +271,22 @@ export default function Cymatics() {
         />
       </section>
 
-      {/* left rail — frequency */}
+      {/* left rail — frequency (excitation, see the frequency model) */}
       <div className="rail rail-left">
         <span className="rail-label">Frequency</span>
         <div className="freq-readout">
-          <strong>{freq.toFixed(2)}</strong> <em>Hz</em>{
-          <span className="note-name">{noteFor(freq).name}</span>}
+          <strong>{Math.round(freq)}</strong> <em>Hz</em>
+          <span className="note-name">{noteName(freq)}</span>
         </div>
         <input
           className="freq-slider"
           type="range"
-          min={BANK_FREQ_MIN}
-          max={BANK_FREQ_MAX}
-          step={0.01}
+          min={EXCITATION_MIN}
+          max={EXCITATION_MAX}
+          step={1}
           value={freq}
           onChange={(e) => setFreq(Number(e.target.value))}
-          aria-label="Drive frequency"
+          aria-label="Excitation frequency"
         />
         <button
           className={`round-btn${source === 'tone' ? ' live' : ''}`}
@@ -332,26 +313,61 @@ export default function Cymatics() {
         </button>
       </div>
 
-      {/* right rail — colour */}
+      {/* right rail — colour: an easy picker for ANY ink */}
       <div className="rail rail-right">
         <span className="rail-label">Color</span>
-        <label className="swatch dropper" title="Pick any colour">
-          <input
-            type="color"
-            value={pigment}
-            onChange={(ev) => { setPigment(ev.target.value); setMessage('Ink picked — click or drag on the water to pour it in.'); }}
-            aria-label="Custom ink colour"
-          />
+
+        {pickerOpen && (
+          <div className="ink-picker" role="dialog" aria-label="Choose an ink">
+            <button
+              className="picker-current"
+              style={{ background: pigment }}
+              title="Selected ink"
+              aria-label={`Selected ink ${pigment}`}
+            />
+            <div className="picker-grid">
+              {PALETTE.map((c) => (
+                <button
+                  key={c}
+                  className={`picker-dot${pigment === c ? ' selected' : ''}`}
+                  style={{ background: c }}
+                  onClick={() => { setPigment(c); setPickerOpen(false); setMessage('Ink picked — click or drag on the water to pour it in.'); }}
+                  aria-label={`Ink colour ${c}`}
+                />
+              ))}
+            </div>
+            <label className="picker-custom">
+              Custom…
+              <input
+                type="color"
+                value={pigment}
+                onChange={(ev) => setPigment(ev.target.value)}
+                aria-label="Custom ink colour"
+              />
+            </label>
+          </div>
+        )}
+
+        <button
+          className="swatch dropper"
+          onClick={() => setPickerOpen((v) => !v)}
+          aria-expanded={pickerOpen}
+          aria-label="Open the colour picker"
+          title="Pick any colour"
+        >
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
             <path d="M10.7 1.9a2.1 2.1 0 0 1 3 3l-1.4 1.4.8.8a.9.9 0 0 1-1.3 1.3l-.8-.8-5 5a1 1 0 0 1-.5.3l-2.4.6a.5.5 0 0 1-.6-.6l.6-2.4a1 1 0 0 1 .3-.5l5-5-.8-.8a.9.9 0 0 1 1.3-1.3l.8.8z" fill="currentColor" />
           </svg>
-        </label>
+        </button>
         {PALETTE.map((c) => (
           <button
             key={c}
             className={`swatch${pigment === c ? ' selected' : ''}`}
             style={{ background: c, color: c }}
-            onClick={() => { setPigment(c); setMessage('Ink picked — click or drag on the water to pour it in.'); }}
+            onClick={() => {
+              setPigment(c); setPickerOpen(false);
+              setMessage('Ink picked — click or drag on the water to pour it in.');
+            }}
             aria-pressed={pigment === c}
             aria-label={`Ink colour ${c}`}
           />

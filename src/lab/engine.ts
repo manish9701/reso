@@ -20,14 +20,14 @@ import * as THREE from 'three';
 import { Studio } from './studio';
 import { createDishGeometry, createDishMaterial } from './dish';
 import { createLiquidGeometry, createLiquidMaterial, LIQUID_R, LIQUID_Y, type LiquidUniforms } from './liquid';
-import { ResonanceModel, type ModeSlot } from '../sim/resonance';
+import { ResonanceModel } from '../sim/resonance';
 import { WaveSimulation, SIM_SIZE } from '../sim/wave';
 import { FigureField, FIGURE_GAIN } from '../sim/figure';
 import { PigmentSimulation, DYE_SIZE } from '../sim/pigment';
 import { DropletSystem } from '../sim/droplets';
 import { FullscreenPass, makeTarget } from '../sim/pass';
 import { COMBINE_FS } from '../sim/shaders';
-import { BANKS, besselJ, resolveDrive, VESSEL, type Boundary } from './resonance';
+import { BANKS, besselJ, resolveDrive, VESSEL, excitationToSim, type Boundary } from './resonance';
 
 export interface LabOptions {
   reflections: boolean;
@@ -111,16 +111,25 @@ export class LabEngine {
   noFigure = false;
   /** True when the standing figure needs re-rendering this frame. */
   figureDirty = true;
-  private __lastSlots: ModeSlot[] | null = null;
+  /** Fingerprint of the modal state the figure last rendered, and the breath
+   *  phase it was rendered at — the render-on-change keys for the figure
+   *  pass (per-frame allocation-free comparison of the modal state). */
+  private __lastFingerprint = '';
+  private __lastBreath = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.studio = new Studio(canvas);
 
     // ---- vessel + liquid ------------------------------------------------
+    // castShadow/receiveShadow: the vessel grounds on the set through the
+    // studio's real key-light shadow map, and the water accepts the shadows
+    // falling INTO it (a drop's shadow on the water sells the contact).
     const dishGeo = createDishGeometry();
-    const glass = createDishMaterial();
+    const { material: glass } = createDishMaterial();
     this.dish = new THREE.Mesh(dishGeo, glass);
+    this.dish.castShadow = true;
+    this.dish.receiveShadow = false;
     this.dish.position.y = 0;
     this.studio.scene.add(this.dish);
 
@@ -128,6 +137,12 @@ export class LabEngine {
     this.liquidUniforms = uniforms;
     this.liquid = new THREE.Mesh(createLiquidGeometry(), material);
     this.liquid.position.y = LIQUID_Y;
+    // Deliberately NOT a shadow receiver: measured on the target machine,
+    // PCFSoft sampling inside the transmissive liquid shader cost ~120 ms
+    // per frame as soon as the shadow map contained close-range geometry
+    // (a falling drop). The water's contact shading comes from the field
+    // and the environment; grounded shadows live on the ground plane.
+    this.liquid.receiveShadow = false;
     this.liquid.frustumCulled = false;
     this.studio.scene.add(this.liquid);
 
@@ -350,9 +365,12 @@ export class LabEngine {
     const r = this.studio.renderer;
 
     // development override (?drive=432&level=0.8) — lets the visual QA harness
-    // drive the figure deterministically without depending on audio autoplay
+    // drive the figure deterministically without depending on audio autoplay.
+    // The override carries the UI EXCITATION frequency (what the slider
+    // shows), mapped through the same documented band transform the live
+    // slider uses — QA never bypasses the frequency model.
     if (this.forcedDrive) {
-      this.drive.freq = this.forcedDrive.freq;
+      this.drive.freq = excitationToSim(this.forcedDrive.freq);
       this.drive.level = this.forcedDrive.level;
     }
 
@@ -374,13 +392,20 @@ export class LabEngine {
       this.breath = (this.breath + Math.sqrt(Math.max(1, lambda)) * 0.22 * dt) % (Math.PI * 2);
     }
     // The figure field is recomputed only when the modal state has actually
-    // moved. At a steady tone the amplitudes converge and the pattern stops
-    // changing; re-evaluating six Bessel modes to an identical result every
-    // frame is pure waste, and this pass is one of the more expensive ones.
-    if (this.figureDirty && !this.noFigure) {
+    // moved: at a steady tone the amplitudes converge and the pattern stops
+    // changing. The previous identity check (`slots !== this.__lastSlots`)
+    // never fired because ResonanceModel returns a FRESH array every call —
+    // so the 512² Bessel pass, one of the most expensive in the pipeline,
+    // ran on every single frame. Fingerprinting (rounded m/kR/amp plus the
+    // rendered breath phase) makes the render-on-change logic actually work;
+    // the breath keeps advancing between renders.
+    const fingerprint = slots.map((s) => `${s.m}|${s.kR.toFixed(3)}|${s.amp.toFixed(2)}`).join(';');
+    const breathMoved = Math.abs(this.breath - this.__lastBreath) > 0.55;
+    if ((this.figureDirty || breathMoved) && !this.noFigure) {
       this.figure.render(r, slots, this.breath);
-      this.figureDirty = slots !== this.__lastSlots;
-      this.__lastSlots = slots;
+      this.figureDirty = false;
+      this.__lastBreath = this.breath;
+      this.__lastFingerprint = fingerprint;
     }
 
     // 3. travelling-wave grid (strikes/drags; fixed substeps, capped catch-up)
@@ -405,38 +430,30 @@ export class LabEngine {
     // pigment into that fine structure — it was reduced earlier to stop
     // dilution, but with the absorbances now high enough to survive mixing,
     // the fine detail is worth the slight spread.
-    const stir = (0.0009 + Math.min(1, Math.log2(Math.max(1, this.drive.freq) / 2) / 3.4) * 0.0042
-      + Math.min(1, this.drive.level) * 0.0026) * (0.4 + this.sim.visc);
+    // The ambient churn tracks the tone: higher frequency visibly agitates
+    // the water faster, so frequency is felt as well as seen.
+    const stir = (0.0008 + Math.min(1, Math.log2(Math.max(1, this.drive.freq) / 2) / 3.4) * 0.0040
+      + Math.min(1, this.drive.level) * 0.0024) * (0.4 + this.sim.visc);
     if (!this.__noDye) this.pigment.step(r, dt, {
-      // gather is the stream-function coefficient: it scales |∂φ/∂xy|, so it
-      // must stay small or the surface churns and the ink dilutes to haze
-      // Chladni migration, the term that actually DRAWS the figure. This has
-      // to dominate the curl transport: if the swirling flow wins, pigment
-      // circulates as a soft cloud and no nodal filament ever forms, which is
-      // exactly what the reference plate does not look like.
-      gather: this.gather * 4.5 * 1.15,
-      // a small diffusion FLOOR is not cosmetic: it is what suppresses the
-      // texel-level noise that advection + unsharp would otherwise amplify
-      // into rainbow speckle across the whole surface
-      // Diffusion floor lowered. Every texel of diffusion bleeds absorbance out of
-      // the filaments, so the floor is an upper bound on how saturated the
-      // dish can ever look. A small floor still suppresses the rainbow speckle
-      // that advection would otherwise amplify.
-      diffusion: Math.max(0.0035, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
-      // Pigment persists longer: real ink in water does not fade in seconds,
-      // and a short relax guarantees the dish washes out before it develops.
+      // Chladni migration — the term that DRAWS the figure. Stronger than the
+      // curl so nodal collection is readable, never strong enough to freeze
+      // the ink: the flow keeps slowly working everything all the time.
+      gather: this.gather * 1.15,
+      // a small diffusion FLOOR suppresses the texel-level noise that
+      // advection + unsharp would otherwise amplify into rainbow speckle;
+      // it also bleeds the compression ridges the settled flow builds back
+      // into soft mass
+      diffusion: Math.max(0.008, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
+      // Pigment persists: real ink in water does not fade in seconds.
       relax: 0.9993 + this.sim.persist * 0.00068,
-      // Curl transport, kept deliberately below the gather term above: this is
-      // what folds and stretches the filaments once they have formed, and it
-      // must not be strong enough to smear them away again.
-      // Curl transport raised. This is what folds a smooth blob into the wandering
-      // filaments the reference shows. It must stay under the nodal gather or
-      // it smears the figure away, but it needs to be strong enough to actually
-      // tear pigment apart.
-      flow: 0.016,
-      swirl: 0.028,
+      // Curl transport: folds and tears pigment into wandering filaments, but
+      // kept SUBTLE — the curl noise stamps one rotation centre per noise
+      // cell, and too much of it decorates the bath with shell spirals
+      // instead of the fine tearing real stirring produces.
+      flow: 0.008,
+      swirl: 0.016,
       stir,
-      sharpen: 0.22,
+      sharpen: 0.10,
       time: this.time,
     }, this.fieldTarget.texture);
 

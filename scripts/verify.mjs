@@ -16,7 +16,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: 'new',
-  args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--hide-scrollbars'],
+  args: [
+    '--no-sandbox',
+    '--autoplay-policy=no-user-gesture-required',
+    '--hide-scrollbars',
+    // try to get real GPU accel where available — SwiftShader FPS numbers
+    // do not say anything about a real machine
+    '--use-angle=d3d11',
+    '--enable-gpu-compositing',
+    '--ignore-gpu-blocklist',
+  ],
   defaultViewport: { width: 1536, height: 1024 },
 });
 const page = await browser.newPage();
@@ -47,7 +56,9 @@ page.on('pageerror', (e) => { errors.push(String(e)); console.log('[pageerror]',
 
 // Use the deterministic drive hook: headless audio autoplay is unreliable, and
 // a tone that silently never starts makes every later assertion meaningless.
-await page.goto(URL + '?drive=4.5&level=0.85', { waitUntil: 'networkidle0' });
+// ?drive= carries the UI EXCITATION frequency (what the slider shows); the
+// engine maps it through the documented band transform (lab/resonance.ts).
+await page.goto(URL + '?drive=432&level=0.85', { waitUntil: 'networkidle0' });
 await sleep(4000);
 
 // prove the water is actually on screen and actually being driven
@@ -97,14 +108,21 @@ await page.evaluate(() => {
 await sleep(6000);
 await page.screenshot({ path: OUT + '\\rt-3-pigment.png' });
 
-// sweep frequency — the figure must reorganise, with cell count rising
-for (const hz of [1.9, 4.5, 8.5]) {
+// sweep frequency — the figure must REORGANISE, not just wiggle: the dominant
+// modal fingerprint (m | k·R) must change across the sweep, which is what
+// makes different frequencies produce genuinely different nodal structures.
+const fingerprints = [];
+const EX_SETUP = [110, 165, 262, 349, 523, 784];   // excitation Hz (UI world)
+for (const hz of EX_SETUP) {
   await page.evaluate((f) => { window.__lab.forcedDrive = { freq: f, level: 0.85 }; }, hz);
   await sleep(3000);
   const m = await page.evaluate(() => window.__lab.figure.slots.map((s) => `m${s.m}@${s.kR.toFixed(1)}`).join(','));
+  fingerprints.push(m);
   console.log(`${hz} Hz -> ${m}`);
   await page.screenshot({ path: `${OUT}\\rt-4-swept-${hz}.png` });
 }
+const unique = new Set(fingerprints).size;
+if (unique < 4) errors.push(`SIM: figures too similar across the sweep (${unique}/6 distinct)`);
 
 console.log('ERRORS:', errors.length ? errors.slice(0, 6) : 'none');
 await browser.close();

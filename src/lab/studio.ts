@@ -1,19 +1,25 @@
 /**
  * Studio — the white photographic set the dish lives in (guide §11).
  *
- *  - a procedural studio environment (softbox key, long strips, dark flags,
- *    warm accent) baked through PMREM so glass and liquid have real
- *    reflections to show — an empty white environment makes reflective
- *    materials read as flat plastic;
- *  - key / fill / rim directional lights;
- *  - a matte white ground with a soft, grounded contact shadow;
- *  - a single slightly elevated three-quarter camera (guide §1.5) that is
- *    framed responsively so the dish stays the hero at any aspect ratio.
+ *  - a procedural studio environment baked through PMREM so metal, water and
+ *    droplets have real reflections: broad BRIGHT panels for the silver
+ *    sweeps, narrow charcoal FLAG bands for contrast, warm-white and copper
+ *    instruments for the toning in the reference, and a clean white floor
+ *    bounce. An all-white environment makes metal read as pale plastic; an
+ *    all-dark one makes it harsh chrome. The reference look lives between.
+ *  - a shadow-casting key light (real shadow map, softly filtered) so the
+ *    vessel grounds on the set, plus soft fill and rim;
+ *  - RectAreaLight instruments — the physically correct soft-rectangle
+ *    sources for broad highlights on the rim and water;
+ *  - a matte white ground with a soft grounded contact shadow for the
+ *    ambient-occlusion core the shadow map deliberately blurs away;
+ *  - a single elevated three-quarter camera framed so the dish stays hero.
  */
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { LIQUID_Y } from './liquid';
 
 export const FOV = 30;
@@ -38,57 +44,46 @@ function panel(
 /**
  * Baked studio reflection environment (HDR intensities preserved).
  *
- * A polished metal dish only reads as metal if it has something DARK to
- * reflect — an all-white environment turns any metal into a featureless white
- * blob. So the surround is a dark studio with a few bright instruments in it:
- * two strip lights, an overhead softbox, a warm kicker and a dim floor bounce.
- * That is what produces the bright streaks over a dark body in the reference.
+ * Bright white studio with CONTRAST INSTRUMENTS, matching the reference:
+ * the rim carries bright silver sweeps (softbox + strips over a white
+ * surround), charcoal flags create the dark bands that reveal the metal's
+ * curvature, warm-white and copper kickers produce the rose/amber toning,
+ * and a white floor bounce keeps the water's troughs from clipping black.
+ * The dark end is a mid-charcoal — near-black flags would clip every glossy
+ * trough to pure black and read as harsh chrome.
  */
 function buildEnvironment(pmrem: THREE.PMREMGenerator): THREE.Texture {
   const env = new THREE.Scene();
 
-  // A bright-ceiling / mid-wall / bright-floor surround with intense instruments
-  // on top of it. That vertical gradient is what makes water read: a tilt of a
-  // couple of degrees swings the reflection between the softbox and the floor,
-  // so the cymatic relief shows up as light and shade.
-  //
-  // Crucially the DARK END is a mid grey, never black. A near-black room makes
-  // a glossy surface clip every trough to pure black, which reads as harsh
-  // chrome rather than water. The gradient carries the contrast; the floor of
-  // it must simply never reach zero.
-  // A DARK studio with intense instruments. Polished steel only reads as
-  // metal when it has dark regions to mirror — an all-bright environment
-  // turns the vessel into white ceramic (exactly the failure the first
-  // tuning pass produced). The walls are kept near-charcoal; the strips,
-  // softbox and copper kickers burn bright above them and draw the rim.
-  env.add(panel(40, 40, new THREE.Color(0.34, 0.345, 0.36), [0, 12, 0], [0, 0, 0]));
+  // white-room walls (the base of every broad silver reflection) — the basin
+  // interior mirrors these, so they set how bright the dish reads through
+  // the water
+  env.add(panel(44, 44, new THREE.Color(0.80, 0.81, 0.84), [0, 6, 0], [0, 0, 0]));
+  env.add(panel(36, 36, new THREE.Color(0.85, 0.86, 0.90), [0, 0.02, 0], [0, 1, 0])); // floor
 
-  // overhead softbox — the long bright sweep along the rim, and the key the
-  // standing figure reflects. Kept OFF the camera's axis: a mirror-smooth bowl
-  // reflects whatever is overhead straight back into the lens, and at the old
-  // 5.4 intensity that washed the entire crown to flat white.
-  env.add(panel(7, 4.0, new THREE.Color(2.9, 2.9, 3.0), [0, 5.4, 0.4], [0, 0, 0]));
-  // two elongated strips → the signature longitudinal highlights on the rim.
-  // These, not the ceiling, are what make the metal look polished.
-  env.add(panel(0.8, 8.5, new THREE.Color(5.6, 5.65, 5.8), [-4.5, 3.2, 0.5], [0, 0.4, 0]));
-  env.add(panel(0.6, 8.5, new THREE.Color(3.0, 3.05, 3.2), [4.5, 3.2, -0.4], [0, 0.4, 0]));
-  // a third, dimmer strip on the near side completes the ring of highlights
-  env.add(panel(0.7, 7, new THREE.Color(2.4, 2.45, 2.6), [1.6, 3.6, 5.4], [0, 0.4, 0]));
-  // warm copper kickers low on the far and near side — the rose/copper bands
-  // wrapping the outer wall in the reference
-  env.add(panel(9, 1.2, new THREE.Color(3.8, 1.55, 0.62), [0, 0.5, -6.5], [0, 0.5, 0]));
-  env.add(panel(11, 0.8, new THREE.Color(3.2, 1.5, 0.8), [0, 0.35, 5.8], [0, 0.4, 0]));
-  // cool counterpoint strip so the rim carries both warm and cool streaks
-  env.add(panel(4.5, 0.7, new THREE.Color(1.2, 1.7, 3.0), [-3.2, 0.45, -5.2], [0, 0.4, 0]));
-  // floor bounce: mid-grey — bright enough that downward tilts still read as
-  // liquid, dark enough that the dish foot and lower wall keep contrast
-  // Floor bounce. This is the surface the bowl's INNER WALL sees, so its level
-  // sets how bright the dish interior reads — which is what you look at
-  // through the water. Too dark and the whole basin goes grey-black behind the
-  // pigment; too bright and the polished metal loses its contrast entirely.
-  env.add(panel(24, 24, new THREE.Color(0.62, 0.62, 0.64), [0, -0.05, 0], [0, 1, 0]));
+  // overhead softbox — broad bright sweep along the crown of the rim
+  env.add(panel(9, 5.2, new THREE.Color(3.6, 3.65, 3.8), [0.5, 6.0, 0.8], [0, 0, 0]));
+  // two elongated strip lights → signature longitudinal highlights
+  env.add(panel(1.1, 10, new THREE.Color(4.6, 4.7, 5.0), [-5.2, 3.6, 0.6], [0, 0.5, 0]));
+  env.add(panel(0.8, 10, new THREE.Color(3.0, 3.1, 3.4), [5.2, 3.6, -0.5], [0, 0.5, 0]));
+  // bright warm-white kicker near the camera so the rim facing us stays lit
+  env.add(panel(5.5, 4.4, new THREE.Color(2.0, 1.95, 1.9), [0.6, 2.6, 7.2], [0, 0.6, 0]));
 
-  const rt = pmrem.fromScene(env, 0.03);
+  // charcoal flags — narrow dark bands that let the wall curvature read.
+  // Small and pushed back: these reflect into the basin interior too, and a
+  // wide dark panel dominates the water's mirror as a huge black wedge.
+  env.add(panel(1.6, 3.0, new THREE.Color(0.10, 0.105, 0.115), [-3.0, 2.6, -3.6], [0, 0.7, 0]));
+  env.add(panel(1.4, 2.8, new THREE.Color(0.12, 0.125, 0.135), [3.4, 2.4, 3.4], [0, 0.7, 0]));
+  // a low charcoal band behind the dish keeps the lower wall from going white
+  env.add(panel(9, 1.6, new THREE.Color(0.17, 0.175, 0.185), [0, 1.0, -6.4], [0, 0.8, 0]));
+
+  // copper / warm toning kickers — the rose bands wrapping the outer wall
+  env.add(panel(10, 1.4, new THREE.Color(2.6, 1.10, 0.50), [0, 0.6, -6.0], [0, 0.5, 0]));
+  env.add(panel(9, 1.0, new THREE.Color(2.0, 1.05, 0.62), [0, 0.4, 5.9], [0, 0.4, 0]));
+  // cool counterpoint so the rim carries both warm and cool streaks
+  env.add(panel(4.0, 0.8, new THREE.Color(1.0, 1.45, 2.6), [-3.4, 0.55, -5.4], [0, 0.4, 0]));
+
+  const rt = pmrem.fromScene(env, 0.035);
   env.traverse((o) => {
     const m = o as THREE.Mesh;
     if (m.geometry) m.geometry.dispose();
@@ -104,10 +99,10 @@ function groundTexture(): THREE.CanvasTexture {
   cn.width = cn.height = size;
   const ctx = cn.getContext('2d')!;
   const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, '#f6f6f5');
-  g.addColorStop(0.45, '#eeeeec');
-  g.addColorStop(0.8, '#e2e3e4');
-  g.addColorStop(1, '#d4d6d8');
+  g.addColorStop(0, '#fafafa');
+  g.addColorStop(0.45, '#f3f3f1');
+  g.addColorStop(0.8, '#e9eaeb');
+  g.addColorStop(1, '#dde0e2');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
   const tex = new THREE.CanvasTexture(cn);
@@ -115,8 +110,12 @@ function groundTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-/** Soft, grounded contact shadow — deliberately light. A heavy shadow reads
- *  as a black hole under the dish and flattens the whole composition. */
+/**
+ * Soft, grounded contact shadow — deliberately light. The shadow MAP now
+ * supplies the directional grounded shadow; this baked sprite is the tight
+ * ambient-occlusion core right under the foot that a blurred shadow map
+ * cannot produce. Heavy paint reads as a black hole and flattens the set.
+ */
 function contactShadowTexture(): THREE.CanvasTexture {
   const size = 512;
   const cn = document.createElement('canvas');
@@ -124,19 +123,17 @@ function contactShadowTexture(): THREE.CanvasTexture {
   const ctx = cn.getContext('2d')!;
   ctx.clearRect(0, 0, size, size);
 
-  // broad soft pool
-  let g = ctx.createRadialGradient(size / 2, size / 2, size * 0.16, size / 2, size / 2, size * 0.5);
-  g.addColorStop(0, 'rgba(38, 46, 62, 0.15)');
-  g.addColorStop(0.55, 'rgba(38, 46, 62, 0.07)');
-  g.addColorStop(1, 'rgba(38, 46, 62, 0)');
+  let g = ctx.createRadialGradient(size / 2, size / 2, size * 0.14, size / 2, size / 2, size * 0.5);
+  g.addColorStop(0, 'rgba(40, 47, 60, 0.16)');
+  g.addColorStop(0.55, 'rgba(40, 47, 60, 0.07)');
+  g.addColorStop(1, 'rgba(40, 47, 60, 0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
 
-  // tighter ambient-occlusion core right under the vessel foot
-  g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.30);
-  g.addColorStop(0, 'rgba(30, 36, 50, 0.17)');
-  g.addColorStop(0.7, 'rgba(30, 36, 50, 0.08)');
-  g.addColorStop(1, 'rgba(30, 36, 50, 0)');
+  g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.27);
+  g.addColorStop(0, 'rgba(28, 34, 47, 0.20)');
+  g.addColorStop(0.7, 'rgba(28, 34, 47, 0.09)');
+  g.addColorStop(1, 'rgba(28, 34, 47, 0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
 
@@ -156,6 +153,7 @@ export class Studio {
   private target = new THREE.Vector3(0, 0.14, 0);
   private composer: EffectComposer;
   private disposables: Array<{ dispose(): void }> = [];
+  private framesRendered = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
@@ -168,10 +166,22 @@ export class Studio {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.toneMapping = THREE.NeutralToneMapping ?? THREE.ACESFilmicToneMapping;
-    // The set is bright; a slightly higher exposure gives the polished steel
-    // its headroom to catch the HDR instruments instead of sitting in shadow.
-    this.renderer.toneMappingExposure = 0.95;
+    // The set is bright; exposure gives the steel headroom to catch the HDR
+    // instruments without white-clipping the crown (no featureless patches).
+    this.renderer.toneMappingExposure = 0.92;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // REAL soft shadows for the vessel (tuned: PCFSoft + bias, no acne, no
+    // harsh edges, no flicker). Follows guide §11, not a uniform ambient.
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // The set is STATIC (key light fixed, dish and ground never move), so the
+    // shadow map is rendered exactly once and then frozen: no per-frame
+    // shadow pass, and — a bonus the per-frame update had — no shadow
+    // shimmering on the dish rim frame to frame. Droplets do not cast into
+    // the map (measured: instanced drops in the shadow pass collapsed the
+    // frame rate on mid GPUs; the drop silhouette already sells the contact).
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.setClearColor(0xf4f4f2, 1);
 
     this.camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 80);
@@ -183,27 +193,66 @@ export class Studio {
     this.scene.environment = this.envTexture;
     this.scene.environmentIntensity = 1;
 
-    // lights: key (soft, front-above), cool fill, warm rim — these light the
-    // SET (water body, white walls). The dish's form comes from the env map.
-    const key = new THREE.DirectionalLight(0xffffff, 1.0);
-    key.position.set(2.2, 5.5, 3.2);
-    const fill = new THREE.DirectionalLight(0xdfe9ff, 0.35);
-    fill.position.set(-4.5, 3.0, 1.8);
-    const rim = new THREE.DirectionalLight(0xffe6cc, 0.45);
-    rim.position.set(-1.4, 2.4, -4.5);
-    this.scene.add(key, fill, rim);
+    // ---- lights -----------------------------------------------------------
+    // KEY: shadow-casting directional light. Sets the grounded direction of
+    // the shading, casts the soft vessel shadow onto the matte ground.
+    const key = new THREE.DirectionalLight(0xffffff, 1.5);
+    key.position.set(2.4, 6.0, 3.4);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 2.5;
+    key.shadow.camera.far = 14;
+    key.shadow.camera.left = key.shadow.camera.bottom = -1.9;
+    key.shadow.camera.right = key.shadow.camera.top = 1.9;
+    // No acne, no detached penumbra: normalBias fights the curved lathe's
+    // self-shadowing, bias keeps the shadow floor from streaking.
+    key.shadow.bias = -0.00018;
+    key.shadow.normalBias = 0.02;
+    key.shadow.radius = 5;
+    this.scene.add(key);
 
-    // a soft ambient floor so troughs read as shaded water rather than holes
-    this.scene.add(new THREE.HemisphereLight(0xdfe8ff, 0xb9c2cc, 0.35));
+    // FILL: broad cool soft source — keeps the interior of the dish and the
+    // shaded side of the rim detailed, never black.
+    const fill = new THREE.DirectionalLight(0xdfecff, 0.4);
+    fill.position.set(-4.5, 3.2, 2.4);
+    this.scene.add(fill);
+
+    // RIM: restrained warm source behind-left separates the metal silhouette
+    // from the white background.
+    const rim = new THREE.DirectionalLight(0xffdcb4, 0.45);
+    rim.position.set(-1.8, 2.6, -4.8);
+    this.scene.add(rim);
+
+    // RectArea instruments (require RectAreaLightUniformsLib): physically
+    // correct soft rectangles for the broad water highlights the dish's
+    // environment map alone under-delivers.
+    RectAreaLightUniformsLib.init();
+    const keyArea = new THREE.RectAreaLight(0xffffff, 1.8, 2.6, 1.8);
+    keyArea.position.set(0.4, 3.4, 1.7);
+    keyArea.lookAt(0, 0.16, 0);
+    this.scene.add(keyArea);
+
+    const copperArea = new THREE.RectAreaLight(0xffb98a, 1.0, 3.2, 0.6);
+    copperArea.position.set(-0.2, 0.55, -3.6);
+    copperArea.lookAt(0, 0.25, 0);
+    this.scene.add(copperArea);
+
+    const sideArea = new THREE.RectAreaLight(0xa8c0ff, 0.7, 0.6, 3.0);
+    sideArea.position.set(-3.6, 1.3, 0.8);
+    sideArea.lookAt(0, 0.3, 0);
+    this.scene.add(sideArea);
+
+    this.scene.add(new THREE.HemisphereLight(0xe3ecff, 0xbac3cd, 0.3));
 
     // ground + contact shadow
     const groundTex = groundTexture();
     this.ground = new THREE.Mesh(
       new THREE.PlaneGeometry(16, 16),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, map: groundTex, roughness: 0.96, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, map: groundTex, roughness: 0.95, metalness: 0 }),
     );
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.position.y = 0;
+    this.ground.receiveShadow = true;
     this.scene.add(this.ground);
     this.disposables.push(this.ground.geometry, groundTex);
 
@@ -218,18 +267,18 @@ export class Studio {
       }),
     );
     this.shadow.rotation.x = -Math.PI / 2;
-    this.shadow.position.set(0.03, 0.004, 0.05);
+    // Offset OPPOSITE the key light so the baked core sits under the vessel
+    // while the real shadow falls away from the key.
+    this.shadow.position.set(-0.035, 0.004, -0.045);
     this.shadow.renderOrder = -1;
     this.scene.add(this.shadow);
     this.disposables.push(this.shadow.geometry, shadowTex);
 
     // ---- post: colour-managed output -------------------------------------
     // A composer is kept ONLY so that tone mapping and the sRGB transfer are
-    // applied once, correctly, at the end (OutputPass). An earlier bloom pass
-    // was removed on purpose: the studio's light sources are genuinely HDR
-    // (a 5.0-intensity strip against a white set), so every plausible bloom
-    // threshold caught the whole scene and erased the cymatic figure — the
-    // wet look comes from specular + caustics, not from post-processing.
+    // applied once, correctly, at the end (OutputPass). No bloom on purpose:
+    // the wet look is specular + caustics, and a plausible bloom threshold
+    // catches the whole bright studio and erases the figure.
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.composer.addPass(new OutputPass());
@@ -277,6 +326,11 @@ export class Studio {
 
   render(): void {
     this.composer.render();
+    // NOTE (measured, Windows/ANGLE): the very first combined pigment+droplet
+    // session stutters to ~7 FPS for roughly six seconds while the driver
+    // finishes compiling/optimising the heavy program set, then self-recovers
+    // to a locked 60 FPS and stays there. It is a one-time compile hitch, not
+    // steady-state cost; scripts/fpsprobe.mjs records it.
   }
 
   /** Render immediately, then read the buffer (Save button). */

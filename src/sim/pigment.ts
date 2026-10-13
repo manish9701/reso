@@ -14,8 +14,12 @@ import * as THREE from 'three';
 import { FullscreenPass, makeTarget } from './pass';
 import { DYE_FS } from './shaders';
 
-/** 1024² keeps ink filaments hairline-sharp instead of smoky. */
-export const DYE_SIZE = 1024;
+/** 768² balances filament sharpness against the pass's fill cost: at 1024²
+ *  the combined-drive frame (advect + 13-tap unsharp + field taps + deposits
+ *  at one megapixel) no longer holds 60 FPS on mid GPUs — the advection/
+ *  unsharp taps scale with texel count, and the figure's own 512² already
+ *  carries the fine structure. */
+export const DYE_SIZE = 768;
 
 export interface DyeParams {
   gather: number;
@@ -48,6 +52,8 @@ export class PigmentSimulation {
   private depAbsUniform: THREE.Vector3[] = Array.from({ length: 8 }, () => new THREE.Vector3());
   private zeroDep: THREE.Vector4[] = Array.from({ length: 8 }, () => new THREE.Vector4());
   private zeroAbs: THREE.Vector3[] = Array.from({ length: 8 }, () => new THREE.Vector3());
+  /** reused scratch: no per-frame allocation in the deposit path */
+  private scratchErase = new THREE.Vector4(0.5, 0.5, 0.01, 0);
 
   constructor(renderer: THREE.WebGLRenderer) {
     // half-float: absorbance needs far more range/precision than 8-bit colour
@@ -114,7 +120,8 @@ export class PigmentSimulation {
     let count = 0;
     const deps = u.uDep.value as THREE.Vector4[];
     const abs = u.uDepAbs.value as THREE.Vector3[];
-    const erase = new THREE.Vector4(0.5, 0.5, 0.01, 0);
+    const erase = this.scratchErase;
+    erase.set(0.5, 0.5, 0.01, 0);
     while (this.queue.length && count < 8) {
       const d = this.queue.shift()!;
       if (d.erase) {
