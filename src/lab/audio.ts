@@ -56,14 +56,23 @@ export class AudioInput {
   async startTone(freq: number, amplitude: number): Promise<void> {
     this.stop();
     const ctx = this.ensure();
-    // A bare sine is the harshest possible timbre at any volume — it is all
-    // fundamental, no body, and slides uncomfortably under the ear. A struck
-    // metal dish does not sound like that. Two detuned partials plus a couple
-    // of quiet, decaying harmonics give it a soft bell-like character that
-    // sits politely in the background instead of drilling into the listener.
-    const mk = (type: OscillatorType, mult: number, gain: number, detune = 0) => {
+
+    // A SOOTHING BED, not a pitch.
+    //
+    // Driving the oscillator straight from the slider made the sound jump
+    // every time the frequency moved, which is the opposite of calming and
+    // gave the tone no useful relationship to what you were looking at. This
+    // is a still, slowly-breathing drone: a root, a fifth above it, and an
+    // octave, each slightly detuned so they beat against one another and the
+    // sound never sits perfectly still.
+    //
+    // Three slow LFOs (deliberately at mutually irrational-ish rates) breathe
+    // the levels and gently detune the voices, so the chord evolves over tens
+    // of seconds without ever repeating audibly. Heavy low-pass, very low
+    // level: this is room tone for looking at water, not music.
+    const mk = (mult: number, gain: number, detune: number) => {
       const o = ctx.createOscillator();
-      o.type = type;
+      o.type = 'sine';
       o.frequency.value = freq * mult;
       o.detune.value = detune;
       const g = ctx.createGain();
@@ -71,51 +80,83 @@ export class AudioInput {
       o.connect(g);
       return { o, g };
     };
-    const parts = [
-      mk('sine', 1, 1.0),
-      mk('sine', 1, 0.35, 7),        // slight detune -> slow beating, adds life
-      mk('sine', 2, 0.16),           // quiet octave
-      mk('sine', 3, 0.07),           // quiet fifth above
+    const voices = [
+      mk(1, 0.55, 0),
+      mk(1, 0.32, 6),      // slow beating against its twin
+      mk(1.5, 0.22, -5),    // a fifth above
+      mk(2, 0.14, 4),       // a quiet octave
     ];
-    // A gentle low-pass takes the glare off the upper partials.
+
     const tone = ctx.createBiquadFilter();
     tone.type = 'lowpass';
-    tone.frequency.value = Math.min(6000, freq * 7);
-    tone.Q.value = 0.5;
+    tone.frequency.value = Math.min(1400, freq * 3.2);
+    tone.Q.value = 0.4;
 
     this.oscGain = ctx.createGain();
     this.oscGain.gain.value = 0;
-    // Quiet, and with a soft limiter above it so no slider position can ever
-    // push this into an uncomfortable level.
-    const level = 0.075 * Math.max(0.05, amplitude);
-    this.oscGain.gain.setTargetAtTime(level, ctx.currentTime, 0.06);
+    // Very quiet. This is ambience; it should be felt more than noticed.
+    const level = 0.035 * Math.max(0.05, amplitude);
+    this.oscGain.gain.setTargetAtTime(level, ctx.currentTime, 1.2);
 
-    for (const p of parts) {
-      p.g.connect(tone);
-      p.o.start();
+    for (const v of voices) {
+      v.g.connect(tone);
+      v.o.start();
     }
     tone.connect(this.oscGain!);
     this.oscGain!.connect(this.analyser!);
     this.oscGain!.connect(this.out!);
-    this.parts = parts.map((p) => p.o);
+    this.parts = voices.map((v) => v.o);
+    this.voices = voices;
+
+    // Breathing: slow, mutually prime-ish rates so the pattern never repeats
+    // within any listenable span.
+    this.lfos = [
+      { osc: ctx.createOscillator(), gain: ctx.createGain(), rate: 0.043, depth: 0.30, param: 'level', idx: 0 },
+      { osc: ctx.createOscillator(), gain: ctx.createGain(), rate: 0.061, depth: 7, param: 'detune', idx: 1 },
+      { osc: ctx.createOscillator(), gain: ctx.createGain(), rate: 0.029, depth: 0.18, param: 'level', idx: 2 },
+    ];
+    for (const l of this.lfos) {
+      l.osc.frequency.value = l.rate;
+      l.gain.gain.value = l.depth;
+      const v = voices[l.idx];
+      if (l.param === 'level') {
+        l.osc.connect(l.gain);
+        l.gain.connect(v.g.gain);
+        v.g.gain.value = 0.55 - l.depth;
+      } else {
+        l.osc.connect(l.gain);
+        l.gain.connect(v.o.detune);
+      }
+      l.osc.start();
+    }
+
     this.kind = 'tone';
     this.onToneStart?.();
   }
 
   private parts: OscillatorNode[] = [];
+  private voices: Array<{ o: OscillatorNode; g: GainNode }> = [];
+  private lfos: Array<{ osc: OscillatorNode; gain: GainNode; rate: number; depth: number; param: string; idx: number }> = [];
 
   onToneStart: (() => void) | null = null;
 
+  /**
+   * Follow the slider, slowly.
+   *
+   * The bed glides rather than stepping: a smooth pitch change every frame
+   * would undo the calm the bed exists to provide, so it moves over about a
+   * second and a half. Moving the frequency slider changes where the chord
+   * sits, which is the useful link between the control and the sound — without
+   * the sound jumping in pitch on every step.
+   */
   setTone(freq: number, amplitude: number) {
     try {
       if (this.oscGain && this.ctx) {
-        const level = 0.075 * Math.max(0.05, amplitude);
-        this.oscGain.gain.setTargetAtTime(level, this.ctx.currentTime, 0.05);
-        // Glide every partial to its new harmonic of the new pitch, so sweeping
-        // the slider sweeps the whole timbre rather than only the fundamental.
-        const ratios = [1, 1, 2, 3];
-        this.parts.forEach((o, i) => {
-          o.frequency.setTargetAtTime(freq * (ratios[i] ?? 1), this.ctx!.currentTime, 0.04);
+        const level = 0.035 * Math.max(0.05, amplitude);
+        this.oscGain.gain.setTargetAtTime(level, this.ctx.currentTime, 0.9);
+        const ratios = [1, 1, 1.5, 2];
+        this.voices.forEach((v, i) => {
+          v.o.frequency.setTargetAtTime(freq * (ratios[i] ?? 1), this.ctx!.currentTime, 1.5);
         });
       }
     } catch { /* tone already stopped */ }
@@ -161,6 +202,13 @@ export class AudioInput {
   }
 
   stop() {
+  // LFO oscillators must be torn down with the voices, or a stopped tone
+  // leaves them running against dead gain nodes.
+  for (const l of this.lfos) { try { l.osc.stop(); } catch { /* already stopped */ } }
+  this.lfos = [];
+  this.voices = [];
+  for (const o of this.parts) { try { o.stop(); } catch { /* already stopped */ } }
+  this.parts = [];
     try { this.osc?.stop(); } catch { /* already stopped */ }
     this.osc = null;
     try { this.micSrc?.disconnect(); } catch { /* noop */ }

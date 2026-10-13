@@ -74,13 +74,14 @@ function buildEnvironment(pmrem: THREE.PMREMGenerator): THREE.Texture {
   env.add(panel(16, 1.1, new THREE.Color(0.14, 0.145, 0.155), [0, 7.2, 2.2], [0, 0, 0]));   // beam across
   env.add(panel(1.6, 18, new THREE.Color(0.16, 0.165, 0.175), [-2.6, 7.4, 0], [0, 0, 0]));  // beam along
   env.add(panel(1.6, 18, new THREE.Color(0.16, 0.165, 0.175), [2.6, 7.4, 0], [0, 0, 0]));   // beam along
-  env.add(panel(0.7, 20, new THREE.Color(7.0, 7.1, 7.4), [-0.9, 7.6, 0], [0, 0, 0]));       // strip line
-  env.add(panel(0.7, 20, new THREE.Color(5.6, 5.7, 6.0), [1.6, 7.6, 0], [0, 0, 0]));        // strip line
-  env.add(panel(0.7, 20, new THREE.Color(3.4, 3.45, 3.7), [4.0, 7.6, 0], [0, 0, 0]));       // strip line
-  // two elongated strip lights → signature longitudinal highlights
-  env.add(panel(1.1, 10, new THREE.Color(4.6, 4.7, 5.0), [-5.2, 3.6, 0.6], [0, 0.5, 0]));
-  env.add(panel(0.8, 10, new THREE.Color(3.0, 3.1, 3.4), [5.2, 3.6, -0.5], [0, 0.5, 0]));
-  // bright warm-white kicker near the camera so the rim facing us stays lit
+  // Overhead strip lines. WIDTH is the lever: at 0.7 world units these returned as
+  env.add(panel(2.6, 20, new THREE.Color(2.6, 2.65, 2.8), [-0.9, 7.6, 0], [0, 0, 0]));       // hard white bands crossing the dish
+  // hard white bands crossing the dish rather than broad soft falloff. Widened and
+  // dimmed so the same energy spreads into a gradient, like a real softbox.
+  env.add(panel(2.4, 20, new THREE.Color(2.1, 2.15, 2.3), [1.6, 7.6, 0], [0, 0, 0]));         // strip line
+  // two elongated strip lights → signature longitudinal highlights on the rim
+  env.add(panel(2.6, 10, new THREE.Color(2.6, 2.7, 2.9), [-5.2, 3.6, 0.6], [0, 0.5, 0]));
+  env.add(panel(2.2, 10, new THREE.Color(1.7, 1.75, 1.95), [5.2, 3.6, -0.5], [0, 0.5, 0]));
   env.add(panel(5.5, 4.4, new THREE.Color(2.0, 1.95, 1.9), [0.6, 2.6, 7.2], [0, 0.6, 0]));
 
   // charcoal flags — narrow dark bands that let the wall curvature read.
