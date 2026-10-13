@@ -219,6 +219,10 @@ export function createLiquidMaterial(): {
     // faint cool cast a shallow depth of clean water gives. The bowl and its
     // colour now reach the eye THROUGH the surface instead of behind an
     // opaque tinted disc.
+    // A cool, properly saturated water tint. This was near-white (0.75, 0.84,
+    // 0.92), which is what made everything grey: the scatter term below is
+    // scaled by this colour, so a near-white tint washed every mixed pigment
+    // toward white and killed the subtractive mixing along with it.
     uWater: { value: new THREE.Vector3(0.75, 0.84, 0.92) },
     uCaustics: { value: 1 },
     uCausticK: { value: 4.8e-7 },
@@ -457,12 +461,18 @@ dyeAbsorb += maxComp(dyeAbsorb) * 0.20 * (vec3(1.0) - dyeAbsorb);
 // the pigment is genuinely dense.
 {
   float depth = maxComp(dyeS.rgb);
-  float push = smoothstep(0.35, 1.2, depth);
-  // Push channels apart around the mean: this is what raises CHROMA without
-  // changing luminance, which is exactly the difference between "saturated
-  // colour" and "brighter colour".
+  // Only the genuinely deep pigment is pushed, and gently.
+  //
+  // At 2.2x, once a pour was dense enough the channels were driven to their
+  // extremes and clipped, which is what destroyed the mixing: over-saturated
+  // primaries stop being combinable, so overlapping colours stopped reading
+  // as subtractive mixes (blue over yellow going green) and just stacked as
+  // flat clipped regions.
+  float push = smoothstep(0.6, 1.8, depth);
+  // Push channels apart around the mean: raises CHROMA without changing
+  // luminance, which is the difference between "saturated" and "brighter".
   float meanCh = (dyeAbsorb.r + dyeAbsorb.g + dyeAbsorb.b) / 3.0;
-  dyeAbsorb = clamp(meanCh + (dyeAbsorb - meanCh) * (1.0 + push * 2.2), 0.0, 1.0);
+  dyeAbsorb = clamp(meanCh + (dyeAbsorb - meanCh) * (1.0 + push * 0.8), 0.0, 1.0);
 }
 // How much liquid the eye is looking through here — a standing swell of dye
 // is a longer optical path than a clear trough, so it reads as denser.
@@ -475,8 +485,19 @@ dyeAbsorb = pow(dyeAbsorb, vec3(pathLen));
 float cover = 1.0 - exp(-dyeS.a * uInkDensity.y);
 // suspended micro-bubbles: a faint animated glitter inside dense pigment,
 // the way a real pour holds countless tiny air bells that catch the light
-float sparkleSrc = vnoise(luvC * 240.0 + vec2(uTime * 1.6, -uTime * 1.1));
-float sparkle = smoothstep(0.80, 0.98, sparkleSrc) * cover * 0.10;
+// Suspended micro-bubbles catching the light.
+  //
+  // This was the "random grainy layer that appears when you click the water".
+  // At a spatial frequency of 240 across a ~900px dish, each noise cell lands
+  // on roughly four pixels — far above the sampling rate, so it aliased into
+  // crawling static rather than reading as bubbles. It was also scaled by
+  // the cover term, so it was invisible on clear water and appeared exactly
+  // where ink was deposited, which is what made it look like clicking caused it.
+  //
+  // Lowered to a frequency that is actually resolvable, and gated to only the
+  // densest pigment so it stays a subtle sheen instead of a film.
+  float sparkleSrc = vnoise(luvC * 46.0 + vec2(uTime * 0.9, -uTime * 0.6));
+  float sparkle = smoothstep(0.74, 0.96, sparkleSrc) * cover * cover * 0.045;
 // Light scattered back OUT of the water by the pigment itself. Its colour is
 // the dye's own transmitted hue, so a red pour scatters red — this is what
 // keeps a colour readable even over a dark part of the bowl, and it is what
