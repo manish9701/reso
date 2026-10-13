@@ -333,7 +333,10 @@ export class LabEngine {
       // A falling drop carries a concentrated core and only a feathered edge.
       // Depositing dense and letting the flow spread it is what produces
       // branching filaments instead of a flat puddle.
-      radius: radius * 1.55,
+      // Spread wider than the drop: the pour disperses on contact, and a wider
+      // initial footprint is what lets neighbouring pours meet and mix instead of
+      // sitting as isolated dots.
+      radius: radius * 1.9,
       amount: volume,
       absorbance,
     });
@@ -469,15 +472,24 @@ export class LabEngine {
       // advection + unsharp would otherwise amplify into rainbow speckle;
       // it also bleeds the compression ridges the settled flow builds back
       // into soft mass
-      diffusion: Math.max(0.008, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
+      // Floor lowered from 0.008: every frame blends ~1% toward the static field,
+      // which over hundreds of frames blurs every pour into a thin haze faster
+      // than it can develop. The mass-only unsharp (not per-channel) is what
+      // keeps the speckle suppressed, so the floor can stay low.
+      diffusion: Math.max(0.005, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
       // Pigment persists: real ink in water does not fade in seconds.
       relax: 0.9993 + this.sim.persist * 0.00068,
       // Curl transport: folds and tears pigment into wandering filaments, but
       // kept SUBTLE — the curl noise stamps one rotation centre per noise
       // cell, and too much of it decorates the bath with shell spirals
       // instead of the fine tearing real stirring produces.
-      flow: 0.008,
-      swirl: 0.016,
+      // Raised from 0.008/0.016: at the lower values pigment sat in tight cores
+      // and never stretched into filaments - the crop measured saturated cores
+      // (max 0.49) over an empty dish (mean 0.08). Transport is what draws cores
+      // out into wisps; the nodal gather underneath keeps them organised instead
+      // of letting them smear into haze.
+      flow: 0.012,
+      swirl: 0.022,
       stir,
       sharpen: 0.10,
       time: this.time,

@@ -165,7 +165,11 @@ export default function Cymatics() {
     e.pointer = p;
     lastPaint.current = p;
     // The colour is DROPPED, not painted: it falls, lands, and mixes in.
-    e.dropIn(p.x, p.y, hexToRgb(pigmentRef.current), 0.55, 0.02);
+    // Rich, dense core: a real drop carries enough pigment to read as colour,
+    // not a faint tint. The earlier 0.55/0.02 covered a third of the area the
+    // old direct stamps did, which is why pours sat as isolated dots instead
+    // of meeting and mixing.
+    e.dropIn(p.x, p.y, hexToRgb(pigmentRef.current), 0.8, 0.03);
     setMessage('A drop falls; it lands, mixes, and the figure carries it.');
   };
 

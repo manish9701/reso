@@ -200,7 +200,12 @@ export function createLiquidMaterial(): {
     // times that is what produced hard radial spokes through the refracted
     // image. The figure is read through the shading normal and caustics, not
     // through silhouette, so a small real displacement is correct here.
-    uAmp: { value: 0.015 },
+    // Raised from 0.015: at the old value the standing relief bent reflections by
+    // barely a degree, so the figure could not modulate the mirrored studio and
+    // the water read as flat grey no matter how correct the field was. The tanh
+    // soft-cap on the slope is what keeps stronger relief from tipping into
+    // wedges, so amplitude can be honest here.
+    uAmp: { value: 0.024 },
     // Optical normal gain lifts the shading slope to a legible level without
     // tipping the surface past vertical. With the studio's vertical gradient
     // this is where a crest reads as a bright swell and a trough as soft shade;
@@ -214,7 +219,7 @@ export function createLiquidMaterial(): {
     // did — the summed gradient is several times larger — so the gain comes
     // DOWN from 15. Too high and the surface stops reading as liquid and turns
     // into hard light/dark wedges with no reflection in between.
-    uNormalGain: { value: 5.2 },
+    uNormalGain: { value: 7.5 },
     // Clear shallow water over polished steel: nearly colourless, with the
     // faint cool cast a shallow depth of clean water gives. The bowl and its
     // colour now reach the eye THROUGH the surface instead of behind an
@@ -232,7 +237,11 @@ export function createLiquidMaterial(): {
     // Weight of the analytic refracted-basin radiance — the water's optical
     // body: the polished steel floor seen through the surface, bent by the
     // live relief, absorbed by the pigment.
-    uRefractGain: { value: 0.5 },
+    // Raised from 0.5: the refracted basin is the water's optical body, and at
+    // the old weight it contributed too little for the pool to read as having
+    // depth. More basin radiance seen through the surface is what reads as
+    // transparency rather than a tinted disc.
+    uRefractGain: { value: 0.7 },
     // (absorbance scale, mass scale) for Beer–Lambert absorption. `mass` is now
     // the OPTICAL PATH LENGTH multiplier for pigment suspended in the water —
     // the colour is no longer painted on the surface, it is light that made it
@@ -243,7 +252,12 @@ export function createLiquidMaterial(): {
 // the reference has ~11% of its dish at maximum chroma, this render had none).
 // Mass scale raised alongside so coverage tracks the deeper colour and dense
 // regions read as real deposit rather than a tint.
-uInkDensity: { value: new THREE.Vector2(2.6, 2.2) },
+// Both scales raised together: the absorbance scale so thin-but-present dye still
+    // tints (the transmitted path was honest but too quiet), and the mass scale so
+    // the same mass engages the specular kill and the powder term. Raised as a
+    // pair because splitting them (strong colour, weak kill or vice versa)
+    // produces either chalk or mud.
+    uInkDensity: { value: new THREE.Vector2(3.2, 3.2) },
     uTime: { value: 0 },
     uMicro: { value: 0.006 },
     // Fraction of the shading relief the refracted path follows. High enough
@@ -290,7 +304,11 @@ uInkDensity: { value: new THREE.Vector2(2.6, 2.2) },
     // The surface reflection is where the cymatic relief reads: the studio's
     // bright strips and dark flags move across the surface as the normals
     // tilt. Kept strong so fine (high-frequency) figures still separate.
-    envMapIntensity: 2.4,
+    // Lowered from 2.4: at that level the white-room mirror alone carried
+    // ~0.8 linear even where the kill was active, leaving no headroom for the
+    // transmitted dye. Clear water still mirrors brightly enough to read as
+    // wet; dense ink now goes dark enough to read as colour.
+    envMapIntensity: 1.2,
     specularIntensity: 1.0,
     side: THREE.FrontSide,
   });
@@ -394,7 +412,11 @@ varying vec3 vWorldPos;`,
         #ifdef USE_ENVMAP
           floorRad = textureCubeUV(envMap, envMapRotation * reflDir, 0.30).rgb;
         #endif
-        floorRad *= 0.85 + 0.15 * vnoise(floorPos.xz * 120.0);   // the dish's turned grain
+        // NO procedural grain on the floor. An earlier version multiplied a
+        // 120-cell value noise into the floor radiance; at render size each
+        // noise cell landed on a few pixels and aliased into a dotted grain
+        // carpet covering the whole dish. It needed no pigment and no drive,
+        // which is why the "grain layer" appeared without any click.
 
         // THE BASIN'S OWN STRUCTURE. The studio environment is smooth in the
         // directions a shallow pool looks into, so sampling it alone gave the
@@ -406,9 +428,22 @@ varying vec3 vWorldPos;`,
         // the live relief: the figure shows up in the water body, not just in
         // the surface reflection.
         float rr = length(floorPos.xz) / 0.87;
-        float rings = 0.96 + 0.04 * sin(rr * 90.0);           // turned rings
-        float wallDark = mix(1.0, 0.42, smoothstep(0.72, 1.0, rr)); // inner wall
-        floorRad *= rings * wallDark * 0.45;
+        // Turning rings, kept sub-visible. A real machined floor has turning
+        // marks, but 4% over ~14 rings reads as banding across the whole dish,
+        // not as machining — and like the grain it needed no pigment and no
+        // drive. Half a percent over ~35 rings dissolves into texture.
+        float rings = 0.995 + 0.005 * sin(rr * 220.0);
+        // The inner wall darkens toward the rim, but gently: crushing the
+        // outer third of the basin to 0.42 is what made the pool read as a
+        // dark opaque disc instead of clear water over bright steel.
+        float wallDark = mix(1.0, 0.60, smoothstep(0.72, 1.0, rr)); // inner wall
+        // The basin body sits BELOW the reflection highlights, not beside
+        // them: it must be darker than the mirrored room or the pool has no
+        // room left for light-and-shade and reads as a flat white veil. The
+        // floor mirror faces the bright ceiling directly, so even a modest
+        // multiplier lands bright — this is set so the body holds mid-grey
+        // and the relief modulates around it.
+        floorRad *= rings * wallDark * 0.55;
 
         // Beer-Lambert down the water column, then the pigment over the same
         // path. NOTE: no pigment-coverage factor here — the refracted body is
@@ -509,16 +544,49 @@ float cover = 1.0 - exp(-dyeS.a * uInkDensity.y);
 // colour of the pigment is exp(-absorbance) — normalising the absorbance
 // itself would show the complement (blue ink reading as orange).
 vec3 dyeHue = dyeAbsorb / max(maxComp(dyeAbsorb), 1e-4);
-vec3 dyeScatter = dyeHue * cover;
-// The surface's own body is nearly colourless — with transmission on, this is
-// only the small diffuse remainder, not the visible colour of the liquid.
 // The surface's own body is nearly BLACK water: at a 52° view angle water
-    // reflects only ~5% of what it receives, so a diffuse body large enough
-    // to "see" is large enough to hide every highlight — the pool read as
-    // milky pale-blue and the relief vanished with it. All of the water's
-    // visible body now comes from the refracted basin below (the correct
-    // source), and what is left here is just a faint scattering floor.
-    diffuseColor.rgb = uWater * 0.18;`,
+// reflects only ~5% of what it receives, so a diffuse body large enough
+// to "see" is large enough to hide every highlight — the pool read as
+// milky pale-blue and the relief vanished with it. All of the water's
+// visible body now comes from the refracted basin below (the correct
+// source), and what is left here is just a faint scattering floor.
+//
+// At 0.035, not zero: with no diffuse term the troughs go fully black
+// wherever the reflection is dark, and black holes read as holes in the
+// water rather than shaded water. And crucially the studio's direct lights
+// (key 1.5 + fill + rim + hemi ≈ 2.65 total) must have almost nothing
+// Lambertian to land on — that flood on a 0.18 body was the flat grey veil
+// covering the whole dish, unaffected by caustics, env intensity OR the
+// basin gain, because it is none of those things.
+    diffuseColor.rgb = uWater * 0.035;`,
+      )
+      // ---- ink reads through its own colour, not the mirror ---------------
+      // Dense pigment must SUPPRESS the white-room mirror sitting on top of
+      // it, or every pour chalks out to pastel no matter how saturated the
+      // dye underneath is. An earlier revision of this file had exactly this
+      // suppression; it was lost in a later rewrite, and the pastel wash is
+      // what came back with it.
+      //
+      // Deliberately PARTIAL, not a full matte kill: the reference ink is
+      // saturated AND wet. Roughness rises enough to spread the mirror into a
+      // soft sheen, and the specular keeps a third of its strength so dense
+      // colour stays luminous instead of turning to flat paint.
+      .replace(
+        '#include <roughnessmap_fragment>',
+        /* glsl */ `#include <roughnessmap_fragment>
+// Suppression is NEAR-TOTAL, not partial: with the studio's bright room behind
+    // it, even a third of the mirror left standing buries the transmitted colour
+    // under white. Measured: 0.35 specular at 2.4 env left 0.84 linear of mirror
+    // over dense ink, washing every pour to pastel. At 0.06 the ink keeps a wet
+    // sheen but the transmitted dye underneath does the talking.
+    roughnessFactor = mix(roughnessFactor, 0.45, cover);`,
+      )
+      .replace(
+        '#include <lights_physical_fragment>',
+        /* glsl */ `#include <lights_physical_fragment>
+#ifdef USE_SPECULAR
+    material.specularColor = mix(material.specularColor, vec3(0.06), cover);
+#endif`,
       )
       // ---- caustics + nodal diagnostic ----------------------------------
       // Reuses the SAME neighbourhood the shading normal already fetched (see
@@ -547,7 +615,14 @@ vec3 dyeScatter = dyeHue * cover;
   // roughness reads as grain rather than as caustics. Only the large-scale
   // standing structure should carry the highlight. The probe reuses the
   // neighbourhood the stencil already took.
-  float rippleFade = smoothstep(0.0, 0.20, abs(gHR - gHL) + abs(gHU - gHD));
+  //
+  // Note the direction: the fade is ONE MINUS the curvature measure, so broad
+  // gentle structure keeps its caustics and grid-scale ripple loses them. An
+  // earlier version had this backwards (keeping caustics only where curvature
+  // was highest), which simultaneously hid the standing figure — the one
+  // thing caustics exist to reveal — and put full caustics on every grid
+  // ripple, the white grain that raced across the surface on every impact.
+  float rippleFade = 1.0 - smoothstep(0.0, 0.20, abs(gHR - gHL) + abs(gHU - gHD));
   caustic *= rippleFade;
 
   float shade = 0.0;
@@ -608,8 +683,15 @@ vec3 dyeScatter = dyeHue * cover;
   // light returning through the liquid
   totalDiffuse += basin * uRefractGain;
   // pigment scattered back out of the water: real ink is luminous rather than
-  // a flat cutout, and it stays readable over a dark patch of the studio
-  totalDiffuse += dyeScatter * uWater * 2.1;
+  // a flat cutout, and it stays readable over a dark patch of the studio.
+  //
+  // In-scattering is BOUNDED by what the pigment absorbed: a fraction of the
+  // absorbed light scattered back out. An earlier version added the dye hue
+  // times near-white water times 2.1, which pastellized every pour toward
+  // white and destroyed subtractive mixing — overlapping colours stopped
+  // combining and just washed out. This version cannot wash out, because it
+  // can never exceed a fraction of the light the dye took.
+  totalDiffuse += dyeHue * (vec3(1.0) - dyeAbsorb) * 0.30;
 }`,
       )
       // ---- raw-field debug views (?debug=dye|mode|h) ---------------------
@@ -649,6 +731,8 @@ if (uDebug > 0.5) {
       ['uniform sampler2D uField;', f],
       ['slope = gradUv', f],
       ['exp(-dyeS.rgb', f],
+      ['roughnessFactor = mix(roughnessFactor, 0.45, cover)', f],
+      ['material.specularColor = mix(material.specularColor, vec3(0.06), cover)', f],
       ['totalDiffuse += basin', f],
       ['uDebug > 0.5', f],
     ] as const) {
