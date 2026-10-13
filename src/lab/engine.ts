@@ -29,6 +29,8 @@ import { FullscreenPass, makeTarget } from '../sim/pass';
 import { COMBINE_FS } from '../sim/shaders';
 import { BANKS, besselJ, resolveDrive, VESSEL, excitationToSim, type Boundary } from './resonance';
 
+const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
+
 export interface LabOptions {
   reflections: boolean;
   caustics: boolean;
@@ -51,6 +53,20 @@ export interface SimParams {
 
 /** Pointer strike → direct velocity kick (h_ring ≈ Δv/ω ≈ 0.3). */
 const IMPULSE_GAIN = 5;
+/** Optical relief gain at the reference mode scale (k·R = 10), and the base
+ *  caustic constant the frequency compensation scales from. */
+/** Optical relief gain at the reference mode scale (k·R = 10).
+ *
+ *  This is an OPTICAL gain, not geometry: the surface displacement stays
+ *  millimetric, and the shading normal (which drives both the reflection and
+ *  the refracted basin) is what carries the relief. Measured field gradients
+ *  are ~0.005/texel on average with crests 60x steeper, so at the old gain
+ *  the average slope was under 6° and the figure was invisible under a
+ *  52° view — the gain has to be large enough that ORDINARY parts of the
+ *  figure tilt the surface, with the shader's tanh soft-saturation keeping
+ *  the steep crests from tipping past vertical. */
+const RELIEF_BASE = 22;
+const CAUSTIC_BASE = 4.8e-7;
 
 /**
  * Ink colour → optical density (Beer–Lambert). A pigment that *looks* like
@@ -162,7 +178,9 @@ export class LabEngine {
     }
     this.wave = new WaveSimulation(this.studio.renderer);
     this.figure = new FigureField(this.studio.renderer);
-    this.pigment = new PigmentSimulation(this.studio.renderer);
+    this.pigment = new PigmentSimulation(this.studio.renderer, this.studio.profile.dye);
+    // the water shader skips its optional taps on the lean tier
+    this.liquidUniforms.uLean.value = this.studio.profile.lean;
     this.fieldTarget = makeTarget(SIM_SIZE, SIM_SIZE, THREE.HalfFloatType);
     this.combine = new FullscreenPass(COMBINE_FS, {
       uFigure: { value: this.figure.texture },
@@ -175,7 +193,8 @@ export class LabEngine {
     this.applyOptions();
 
     const dbg = new URLSearchParams(window.location.search).get('debug');
-    this.liquidUniforms.uDebug.value = dbg === 'dye' ? 1 : dbg === 'mode' ? 2 : dbg === 'h' ? 3 : 0;
+    this.liquidUniforms.uDebug.value =
+      dbg === 'dye' ? 1 : dbg === 'mode' ? 2 : dbg === 'h' ? 3 : dbg === 'n' ? 6 : dbg === 'cover' ? 5 : 0;
   }
 
   /* ---------------------------------------------------------------- */
@@ -281,7 +300,7 @@ export class LabEngine {
     u: number, v: number, radius: number, volume: number,
     absorbance: [number, number, number],
   ): void => {
-// Contact disturbance: a narrow ring travels outward from where the drop
+// Contact disturbance: a broad, SOFT ring travels outward from where the drop
     // landed.
     //
     // There is deliberately NO negative impulse here. An earlier version
@@ -289,7 +308,13 @@ export class LabEngine {
     // makes a dimple — but that dimple persists as a visible circular crater
     // ringed on the water, which is exactly the artefact that looked wrong.
     // A drop landing on water reads as a quick expanding ripple, not a hole.
-    this.wave.addImpulse(u, v, 1.15 * volume, Math.max(1e-6, (radius * 1.15) ** 2));
+    //
+    // The kick is kept LOW and WIDE (small amplitude, wide σ). A hot, narrow
+    // kick injects grid-scale wavelengths the shading normals amplify into
+    // the crawling white grain that used to race across the whole surface
+    // after every drop; a broad, gentle impulse keeps the same travelling
+    // ring, but as one smooth swell.
+    this.wave.addImpulse(u, v, 0.45 * volume, Math.max(1e-6, (radius * 2.4) ** 2));
     // Only a first, dense slice of pigment is released at the contact frame;
     // the rest trickles out as the drop spreads. Dumping the whole volume in
     // one go drops a solid blob rather than laying down a core.
@@ -414,6 +439,7 @@ export class LabEngine {
         tension: this.sim.tension,
         damp: (1 - this.sim.damp) * 20 + 0.6,
         wall: 1.4,
+        maxSubsteps: this.studio.profile.substeps,
       });
     }
 
@@ -461,6 +487,31 @@ export class LabEngine {
     this.liquidUniforms.uField.value = this.fieldTarget.texture;
     this.liquidUniforms.uDye.value = this.pigment.texture;
     this.liquidUniforms.uTime.value = this.time;
+
+    // 7. frequency-compensated relief — THE fix for "turn the pitch up and the
+    //    cymatics disappear".
+    //
+    //    A high mode carries proportionally less SLOPE at the same visual
+    //    amplitude (its cells are an order of magnitude smaller), so one
+    //    fixed optical normal gain makes fine figures vanish: crests stop
+    //    catching light and the surface goes flat glass. The caustic gain has
+    //    the opposite problem — curvature scales as k², so the same fixed
+    //    caustic constant blows fine figures out to flat white.
+    //
+    //    Both gains are therefore derived from the DOMINANT mode's wavenumber
+    //    k·R: the normal gain rises with √k to keep fine figures legible, and
+    //    the caustic gain falls with k to stop fine figures clipping. The
+    //    change is smoothed and clamped, so sweeping the slider moves relief
+    //    continuously — no popping, and the simulation itself is untouched.
+    if (dom) {
+      const kR = Math.max(0.5, dom.kR);
+      const targetNormal = clamp(RELIEF_BASE * Math.pow(kR / 10, 0.42), RELIEF_BASE * 0.9, RELIEF_BASE * 2.6);
+      const targetCaustic = CAUSTIC_BASE / Math.pow(kR / 10, 0.55);
+      const u = this.liquidUniforms;
+      u.uNormalGain.value += (targetNormal - u.uNormalGain.value) * Math.min(1, dt * 3.0);
+      u.uCausticK.value += (targetCaustic - u.uCausticK.value) * Math.min(1, dt * 3.0);
+      u.uReliefMix.value = 0.42 + Math.min(0.28, Math.log2(kR / 10) * 0.16);
+    }
   }
 
   render(): void {

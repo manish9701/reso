@@ -19,8 +19,8 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { LIQUID_Y } from './liquid';
+import { detectTier, profileFor, readRenderer, type QualityProfile } from './quality';
 
 export const FOV = 30;
 export const ELEVATION_DEG = 52;
@@ -63,6 +63,20 @@ function buildEnvironment(pmrem: THREE.PMREMGenerator): THREE.Texture {
 
   // overhead softbox — broad bright sweep along the crown of the rim
   env.add(panel(9, 5.2, new THREE.Color(3.6, 3.65, 3.8), [0.5, 6.0, 0.8], [0, 0, 0]));
+  // CEILING RIGGING — dark beams and bright strip lines overhead.
+  //
+  // Not decoration: at a 52° camera the water mirrors the ceiling, so a
+  // cymatic relief of a few degrees' tilt can only be SEEN if the radiance it
+  // reflects changes across those few degrees. A single softbox makes the pool
+  // a flat pale wash no matter how strong the relief is; beams and strip lines
+  // give the surface the banded light-and-shade that makes the figure read —
+  // and a real studio ceiling has exactly that structure.
+  env.add(panel(16, 1.1, new THREE.Color(0.14, 0.145, 0.155), [0, 7.2, 2.2], [0, 0, 0]));   // beam across
+  env.add(panel(1.6, 18, new THREE.Color(0.16, 0.165, 0.175), [-2.6, 7.4, 0], [0, 0, 0]));  // beam along
+  env.add(panel(1.6, 18, new THREE.Color(0.16, 0.165, 0.175), [2.6, 7.4, 0], [0, 0, 0]));   // beam along
+  env.add(panel(0.7, 20, new THREE.Color(7.0, 7.1, 7.4), [-0.9, 7.6, 0], [0, 0, 0]));       // strip line
+  env.add(panel(0.7, 20, new THREE.Color(5.6, 5.7, 6.0), [1.6, 7.6, 0], [0, 0, 0]));        // strip line
+  env.add(panel(0.7, 20, new THREE.Color(3.4, 3.45, 3.7), [4.0, 7.6, 0], [0, 0, 0]));       // strip line
   // two elongated strip lights → signature longitudinal highlights
   env.add(panel(1.1, 10, new THREE.Color(4.6, 4.7, 5.0), [-5.2, 3.6, 0.6], [0, 0.5, 0]));
   env.add(panel(0.8, 10, new THREE.Color(3.0, 3.1, 3.4), [5.2, 3.6, -0.5], [0, 0.5, 0]));
@@ -153,6 +167,10 @@ export class Studio {
   private target = new THREE.Vector3(0, 0.14, 0);
   private composer: EffectComposer;
   private disposables: Array<{ dispose(): void }> = [];
+  /** the profile chosen for the GPU this page actually found */
+  readonly profile: QualityProfile;
+  /** last drawing-buffer size, so a resize re-applies the fixed ratio */
+  private lastSize = { w: 2, h: 2 };
   private framesRendered = 0;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -160,11 +178,24 @@ export class Studio {
       canvas,
       antialias: true,
       alpha: false,
-      // capture() reads the drawing buffer for Save (guide §12)
-      preserveDrawingBuffer: true,
+      // NOTE: preserveDrawingBuffer is deliberately OFF. capture() (Save)
+      // renders and reads the drawing buffer in the SAME synchronous tick, so
+      // the pixels are still there — but leaving the flag on forces the
+      // driver to keep a full extra copy of every frame, which costs real
+      // frame time for nothing.
+      preserveDrawingBuffer: false,
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+
+    // ---- GPU tier --------------------------------------------------------
+    // A discrete GTX 1050 and an Intel UHD 630 differ by ~10x in fill rate, so
+    // the render scale, shadow size, pigment buffer and per-pixel shader work
+    // all follow the detected tier. See ./quality.ts. The simulation is
+    // identical on both — only sampling density changes.
+    const gl = this.renderer.getContext();
+    const rendererName = readRenderer(gl);
+    this.profile = profileFor(detectTier(rendererName), rendererName);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.profile.dpr));
     this.renderer.toneMapping = THREE.NeutralToneMapping ?? THREE.ACESFilmicToneMapping;
     // The set is bright; exposure gives the steel headroom to catch the HDR
     // instruments without white-clipping the crown (no featureless patches).
@@ -199,7 +230,7 @@ export class Studio {
     const key = new THREE.DirectionalLight(0xffffff, 1.5);
     key.position.set(2.4, 6.0, 3.4);
     key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.mapSize.set(this.profile.shadowMap, this.profile.shadowMap);
     key.shadow.camera.near = 2.5;
     key.shadow.camera.far = 14;
     key.shadow.camera.left = key.shadow.camera.bottom = -1.9;
@@ -223,32 +254,22 @@ export class Studio {
     rim.position.set(-1.8, 2.6, -4.8);
     this.scene.add(rim);
 
-    // RectArea instruments (require RectAreaLightUniformsLib): physically
-    // correct soft rectangles for the broad water highlights the dish's
-    // environment map alone under-delivers.
-    RectAreaLightUniformsLib.init();
-    const keyArea = new THREE.RectAreaLight(0xffffff, 1.8, 2.6, 1.8);
-    keyArea.position.set(0.4, 3.4, 1.7);
-    keyArea.lookAt(0, 0.16, 0);
-    this.scene.add(keyArea);
-
-    const copperArea = new THREE.RectAreaLight(0xffb98a, 1.0, 3.2, 0.6);
-    copperArea.position.set(-0.2, 0.55, -3.6);
-    copperArea.lookAt(0, 0.25, 0);
-    this.scene.add(copperArea);
-
-    const sideArea = new THREE.RectAreaLight(0xa8c0ff, 0.7, 0.6, 3.0);
-    sideArea.position.set(-3.6, 1.3, 0.8);
-    sideArea.lookAt(0, 0.3, 0);
-    this.scene.add(sideArea);
-
+    // The softbox / copper / cool shaping lives in the baked ENVIRONMENT (one
+    // IBL lookup) rather than in extra lights: on the integrated tier every
+    // additional light is a full BRDF evaluation on every pixel of a
+    // full-frame set, and LTC area lights are the most expensive of all.
     this.scene.add(new THREE.HemisphereLight(0xe3ecff, 0xbac3cd, 0.3));
 
     // ground + contact shadow
     const groundTex = groundTexture();
+    // On the lean tier the matte sweep is Lambert: the ground fills the frame
+    // and gains nothing visible from a PBR specular lobe.
+    const groundMat = this.profile.groundLambert
+      ? new THREE.MeshLambertMaterial({ color: 0xffffff, map: groundTex })
+      : new THREE.MeshStandardMaterial({ color: 0xffffff, map: groundTex, roughness: 0.95, metalness: 0 });
     this.ground = new THREE.Mesh(
       new THREE.PlaneGeometry(16, 16),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, map: groundTex, roughness: 0.95, metalness: 0 }),
+      groundMat,
     );
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.position.y = 0;
@@ -288,12 +309,19 @@ export class Studio {
   resize(width: number, height: number): void {
     const w = Math.max(2, width);
     const h = Math.max(2, height);
+    this.lastSize = { w, h };
+    this.renderer.setPixelRatio(this.ratioForQuality());
     this.renderer.setSize(w, h, false);
     this.composer.setSize(w, h);
     const aspect = w / h;
     this.camera.aspect = aspect;
     this.frame(aspect);
     this.camera.updateProjectionMatrix();
+  }
+
+  /** Pixel ratio actually in use (from the detected GPU tier). */
+  private ratioForQuality(): number {
+    return Math.min(window.devicePixelRatio || 1, this.profile.dpr);
   }
 
   /**
@@ -356,7 +384,8 @@ export class Studio {
 
   dispose(): void {
     this.ground.geometry.dispose();
-    (this.ground.material as THREE.MeshStandardMaterial).map?.dispose();
+    const gm = this.ground.material as THREE.MeshStandardMaterial & THREE.MeshLambertMaterial;
+    gm.map?.dispose();
     (this.ground.material as THREE.Material).dispose();
     this.shadow.geometry.dispose();
     (this.shadow.material as THREE.Material).dispose();

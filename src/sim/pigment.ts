@@ -14,11 +14,10 @@ import * as THREE from 'three';
 import { FullscreenPass, makeTarget } from './pass';
 import { DYE_FS } from './shaders';
 
-/** 768² balances filament sharpness against the pass's fill cost: at 1024²
- *  the combined-drive frame (advect + 13-tap unsharp + field taps + deposits
- *  at one megapixel) no longer holds 60 FPS on mid GPUs — the advection/
- *  unsharp taps scale with texel count, and the figure's own 512² already
- *  carries the fine structure. */
+/** Default pigment buffer edge (px). The engine passes a TIER-specific size
+ *  (1024 on a discrete GPU, 640 on the lean/integrated tier) — the advection
+ *  pass scales with texel count, and the figure's own 512² already carries the
+ *  fine structure. */
 export const DYE_SIZE = 768;
 
 export interface DyeParams {
@@ -43,7 +42,7 @@ export interface Dab {
 }
 
 export class PigmentSimulation {
-  readonly size = DYE_SIZE;
+  readonly size: number;
   private targets: THREE.WebGLRenderTarget[];
   private idx = 0;
   private pass: FullscreenPass;
@@ -55,13 +54,14 @@ export class PigmentSimulation {
   /** reused scratch: no per-frame allocation in the deposit path */
   private scratchErase = new THREE.Vector4(0.5, 0.5, 0.01, 0);
 
-  constructor(renderer: THREE.WebGLRenderer) {
+  constructor(renderer: THREE.WebGLRenderer, size = DYE_SIZE) {
+    this.size = size;
     // half-float: absorbance needs far more range/precision than 8-bit colour
-    this.targets = [makeTarget(DYE_SIZE, DYE_SIZE, THREE.HalfFloatType), makeTarget(DYE_SIZE, DYE_SIZE, THREE.HalfFloatType)];
+    this.targets = [makeTarget(size, size, THREE.HalfFloatType), makeTarget(size, size, THREE.HalfFloatType)];
     this.pass = new FullscreenPass(DYE_FS, {
       uDye: { value: null },
       uField: { value: null },
-      uTexel: { value: new THREE.Vector2(1 / DYE_SIZE, 1 / DYE_SIZE) },
+      uTexel: { value: new THREE.Vector2(1 / size, 1 / size) },
       uDt: { value: 1 / 60 },
       uGather: { value: 0.3 },
       uDiffusion: { value: 0.02 },

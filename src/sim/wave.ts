@@ -61,6 +61,8 @@ export interface WaveParams {
   damp: number;
   /** wall absorption (1/s) */
   wall: number;
+  /** catch-up cap for this frame (GPU tier): fewer substeps on lean hardware */
+  maxSubsteps?: number;
 }
 
 export interface Impulse {
@@ -115,10 +117,11 @@ export class WaveSimulation {
 
   /** Advance the travelling-wave field with fixed substeps + capped catch-up. */
   step(renderer: THREE.WebGLRenderer, dt: number, p: WaveParams): void {
-    this.acc = Math.min(this.acc + dt, FIXED_DT * MAX_SUBSTEPS * 2);
+    const cap = Math.min(MAX_SUBSTEPS, Math.max(2, p.maxSubsteps ?? MAX_SUBSTEPS));
+    this.acc = Math.min(this.acc + dt, FIXED_DT * cap * 2);
     let n = Math.floor(this.acc / FIXED_DT);
     if (n <= 0) return;
-    n = Math.min(n, MAX_SUBSTEPS);
+    n = Math.min(n, cap);
     this.acc -= n * FIXED_DT;
 
     const u = this.stepPass.material.uniforms;
