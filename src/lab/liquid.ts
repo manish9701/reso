@@ -238,7 +238,9 @@ uInkDensity: { value: new THREE.Vector2(2.3, 3.4) },
     // while leaving the surface reflection itself sharp.
     roughness: 0.075,
     metalness: 0,
-    envMapIntensity: 1.0,
+    // Lowered for the same reason: the reflected instruments were overwhelming
+    // the pigment and the figure.
+    envMapIntensity: 0.5,
     specularIntensity: 1.0,
     side: THREE.FrontSide,
   });

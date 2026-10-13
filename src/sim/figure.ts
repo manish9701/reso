@@ -24,7 +24,7 @@ import { FIGURE_FS } from './shaders';
 import type { ModeSlot } from './resonance';
 
 export const FIGURE_SIZE = 512;
-const MAX_MODES = 6;
+const MAX_MODES = 4;
 
 /**
  * Peaks that actually reach the surface; slots beyond this are dropped.
@@ -36,7 +36,7 @@ const MAX_MODES = 6;
  * TOTAL relief roughly constant as more modes are added, so extra modes buy
  * finer interfering detail instead of simply more amplitude.
  */
-export const FIGURE_GAIN = 0.62;
+export const FIGURE_GAIN = 0.95;
 
 export class FigureField {
   readonly size = FIGURE_SIZE;

@@ -97,8 +97,14 @@ export class ResonanceModel {
     // when 4-6 modes of comparable amplitude are allowed to interfere. Two
     // modes cannot make that pattern at any amplitude.
     const top = Math.abs(slots[0]?.amp ?? 0);
-    const kept = slots.filter((s) => Math.abs(s.amp) > top * 0.45);
-    return kept.slice(0, 6);
+    const kept = slots.filter((s) => Math.abs(s.amp) > top * 0.62);
+    // Only the clearly-leading modes. Ten simultaneous modes is not 'variety', it
+    // is mush: every frequency produced the same dense interference mush because
+    // the figure shader's sqrt(n) normalisation cancels the added amplitude. A
+    // handful of dominant modes gives a clean, RECOGNISABLE pattern per
+    // frequency, and it is the dominance that changes as the slider moves -
+    // which is what makes the spectrum feel like it is going somewhere.
+    return kept.slice(0, 3);
   }
 
   /** Dominant mode name for diagnostics / debug overlay. */

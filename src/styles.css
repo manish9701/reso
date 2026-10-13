@@ -45,6 +45,16 @@ body { margin: 0; font-family: var(--sans); color: var(--ink); background: var(-
 .freq-readout { margin-top: -4px; margin-bottom: 2px; white-space: nowrap; }
 .freq-readout strong { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; color: var(--ink); font-variant-numeric: tabular-nums; }
 .freq-readout em { font-style: normal; font-size: 13px; color: var(--ink-3); font-weight: 650; }
+/* The audible note the tone actually plays, shown beside the true resonance.
+   The two differ on purpose: the vessel resonates far below hearing. */
+.note-name {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
 
 /* vertical frequency slider */
 .freq-slider {

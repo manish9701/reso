@@ -24,6 +24,7 @@ export class AudioInput {
   private analyser: AnalyserNode | null = null;
   private out: GainNode | null = null;
   private osc: OscillatorNode | null = null;
+  private toneFilter: BiquadFilterNode | null = null;
   private oscGain: GainNode | null = null;
   private micStream: MediaStream | null = null;
   private micSrc: MediaStreamAudioSourceNode | null = null;
@@ -55,27 +56,67 @@ export class AudioInput {
   async startTone(freq: number, amplitude: number): Promise<void> {
     this.stop();
     const ctx = this.ensure();
-    this.osc = ctx.createOscillator();
-    this.osc.type = 'sine';
-    this.osc.frequency.value = freq;
+    // A bare sine is the harshest possible timbre at any volume — it is all
+    // fundamental, no body, and slides uncomfortably under the ear. A struck
+    // metal dish does not sound like that. Two detuned partials plus a couple
+    // of quiet, decaying harmonics give it a soft bell-like character that
+    // sits politely in the background instead of drilling into the listener.
+    const mk = (type: OscillatorType, mult: number, gain: number, detune = 0) => {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = freq * mult;
+      o.detune.value = detune;
+      const g = ctx.createGain();
+      g.gain.value = gain;
+      o.connect(g);
+      return { o, g };
+    };
+    const parts = [
+      mk('sine', 1, 1.0),
+      mk('sine', 1, 0.35, 7),        // slight detune -> slow beating, adds life
+      mk('sine', 2, 0.16),           // quiet octave
+      mk('sine', 3, 0.07),           // quiet fifth above
+    ];
+    // A gentle low-pass takes the glare off the upper partials.
+    const tone = ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = Math.min(6000, freq * 7);
+    tone.Q.value = 0.5;
+
     this.oscGain = ctx.createGain();
     this.oscGain.gain.value = 0;
-    this.oscGain.gain.setTargetAtTime(0.14 * Math.max(0.05, amplitude), ctx.currentTime, 0.05);
-    this.osc.connect(this.oscGain);
-    this.oscGain.connect(this.analyser!);
-    this.oscGain.connect(this.out!);
-    this.osc.start();
+    // Quiet, and with a soft limiter above it so no slider position can ever
+    // push this into an uncomfortable level.
+    const level = 0.075 * Math.max(0.05, amplitude);
+    this.oscGain.gain.setTargetAtTime(level, ctx.currentTime, 0.06);
+
+    for (const p of parts) {
+      p.g.connect(tone);
+      p.o.start();
+    }
+    tone.connect(this.oscGain!);
+    this.oscGain!.connect(this.analyser!);
+    this.oscGain!.connect(this.out!);
+    this.parts = parts.map((p) => p.o);
     this.kind = 'tone';
     this.onToneStart?.();
   }
+
+  private parts: OscillatorNode[] = [];
 
   onToneStart: (() => void) | null = null;
 
   setTone(freq: number, amplitude: number) {
     try {
-      if (this.osc && this.ctx) {
-        this.osc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.03);
-        this.oscGain?.gain.setTargetAtTime(0.14 * Math.max(0.05, amplitude), this.ctx.currentTime, 0.05);
+      if (this.oscGain && this.ctx) {
+        const level = 0.075 * Math.max(0.05, amplitude);
+        this.oscGain.gain.setTargetAtTime(level, this.ctx.currentTime, 0.05);
+        // Glide every partial to its new harmonic of the new pitch, so sweeping
+        // the slider sweeps the whole timbre rather than only the fundamental.
+        const ratios = [1, 1, 2, 3];
+        this.parts.forEach((o, i) => {
+          o.frequency.setTargetAtTime(freq * (ratios[i] ?? 1), this.ctx!.currentTime, 0.04);
+        });
       }
     } catch { /* tone already stopped */ }
   }

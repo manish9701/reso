@@ -36,7 +36,23 @@ const MAX_SUBSTEPS = 16;
  * the ring structure survives to the rim. The matching ripple frequency for
  * a typical kick (σ ≈ 0.05 uv) is ≈ 1 Hz — comfortably visible.
  */
-const C2_BASE = 32000;
+/**
+ * Wave-speed², in TEXEL units: the shader's Laplacian is the unscaled
+ * 5-point stencil (≈ ∇² with dx = 1 texel), so the wave speed is
+ * sqrt(C2) texels/s.
+ *
+ * Speed matters more than it looks. At the previous 32000 a ripple crossed the
+ * 512-wide basin in ~1.4 s, which read as slow and syrupy — nothing like a
+ * real cymatics plate, where ring waves visibly snap outward. Raising it to
+ * ~100000 gives sqrt(C2) ≈ 316 texels/s, so a ring crosses in ~0.8 s.
+ *
+ * That value is chosen to stay under the explicit scheme's stability ceiling,
+ * not by feel: stable while C2·8·dt² < 4, and with the fixed 1/480 s substep
+ * that is C2 ≲ 115000. This sits just under it with a margin, because
+ * overshooting does not degrade gracefully — the field rails and the surface
+ * turns to hard geometric shards.
+ */
+const C2_BASE = 100000;
 
 export interface WaveParams {
   /** 0..1 UI Surface Tension → wave speed */

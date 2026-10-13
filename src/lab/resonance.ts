@@ -45,8 +45,8 @@ const J_ZERO: Record<number, number[]> = {
 };
 
 /** Orders and radial indices carried in the bank. */
-const MAX_M = 11;
-const MAX_N = 9;
+const MAX_M = 14;
+const MAX_N = 12;
 
 /**
  * Zeros beyond the tables use the standard large-argument asymptotics
@@ -133,7 +133,7 @@ function buildBank(b: Boundary): CymaticMode[] {
     for (let n = 1; n <= MAX_N; n++) {
       // skip absurdly high-radial axisymmetric modes (rings without spokes
       // read as noise, not as a figure)
-      if (m === 0 && n > 4) continue;
+      if (m === 0 && n > 7) continue;
       const z = zeroAt(T, m, n, derivative);
       const k = z / VESSEL.radius;
       bank.push({ m, n, k, freq: modeFreq(k) });

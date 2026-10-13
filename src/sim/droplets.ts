@@ -29,6 +29,25 @@ const RELEASE_HEIGHT = 0.34;
 /** World height of the water surface (kept in sync with LIQUID_Y in liquid.ts). */
 const SURFACE_Y = 0.094;
 
+/**
+ * Impact state machine.
+ *
+ *   MERGE   the drop reaches the surface, flattens onto it and starts to spread
+ *   SPREAD  it thins along the surface while releasing pigment progressively
+ *   DONE    gone — by then it is a film, not a body
+ *
+ * The previous behaviour was a single frame in which a full sphere vanished
+ * and its entire pigment mass appeared at once. That reads as a teleport: the
+ * drop blinks out of existence and leaves a coloured blob behind. Spreading it
+ * over a handful of frames costs nothing and is the whole difference between a
+ * drop that lands and one that vanishes.
+ */
+type Phase = 'fall' | 'merge' | 'spread' | 'done';
+/** Seconds flattened on the surface before it has fully merged away. */
+const MERGE_TIME = 0.035;
+const SPREAD_TIME = 0.32;
+/** What a drop fades toward as it dissolves - the water it joins. */
+const WATER_TINT = new THREE.Color(0.62, 0.70, 0.78);
 interface Drop {
   live: boolean;
   /** disc position, uv 0..1 */
@@ -48,22 +67,42 @@ interface Drop {
   color: THREE.Color;
   /** seconds since release */
   age: number;
+  /** impact state */
+  phase: Phase;
+  /** seconds spent in the current phase */
+  phaseT: number;
+  /** pigment already released, so the pour is progressive not lumpy */
+  released: number;
 }
 
-/** A falling drop: a stretched sphere with a bright meniscus. */
-function dropletMaterial(): THREE.MeshPhysicalMaterial {
-  return new THREE.MeshPhysicalMaterial({
+/**
+ * A falling drop.
+ *
+ * Deliberately NOT MeshPhysicalMaterial. The previous version used a physical
+ * material with `transmission`, which put every droplet into the scene's
+ * transmission pass — the single most expensive thing in the frame — to render
+ * objects a few dozen pixels across. It also looked wrong: a hard mirror-
+ * specular sphere reads as a glass bead or a capsule, never as a drop of ink.
+ *
+ * A drop of coloured water is a small volume of pigment: it is strongly
+ * coloured, mostly opaque at the core, wet on the surface, and lit by a soft
+ * studio rather than by hard highlights. MeshStandardMaterial gives all of
+ * that for a fraction of the cost, and the per-instance colour carries the
+ * pigment through untouched.
+ */
+function dropletMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
     color: 0xffffff,
-    roughness: 0.04,
+    // Wet, but not a mirror. A very low roughness gives a single hard specular
+    // dot that reads as a bead; a little roughness spreads it into the soft
+    // elongated highlight a real drop shows against a softbox.
+    roughness: 0.16,
     metalness: 0,
-    // Real drops are small lenses of liquid: they refract, they are not flat.
-    transmission: 0.55,
-    thickness: 0.06,
-    ior: 1.333,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.03,
-    envMapIntensity: 1.6,
-    emissive: new THREE.Color(0, 0, 0),
+    envMapIntensity: 0.9,
+    // A touch of self-lit colour so a drop still reads as coloured when it
+    // passes in front of a dark part of the dish.
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity: 0.12,
   });
 }
 
@@ -71,14 +110,18 @@ export class DropletSystem {
   readonly group = new THREE.Group();
   private drops: Drop[] = [];
   private mesh: THREE.InstancedMesh;
-  private material: THREE.MeshPhysicalMaterial;
+  private material: THREE.MeshStandardMaterial;
   private geom: THREE.IcosahedronGeometry;
   private dummy = new THREE.Object3D();
+  /** Pre-darkened instance colours so a drop's pigment reads against the sky. */
+  private tmpColor = new THREE.Color();
 
   constructor() {
-    // Icosphere: a drop is small on screen, so a low-poly sphere is plenty,
-    // and it keeps the vertex count trivial for 28 instances.
-    this.geom = new THREE.IcosahedronGeometry(1, 2);
+    // Detail 3 gives a smooth silhouette: at detail 2 the icosahedron's facets
+    // are visible on the outline of a falling drop, which reads as faceted
+    // plastic rather than liquid. 1280 triangles for 28 instances is still
+    // nothing next to the water mesh.
+    this.geom = new THREE.IcosahedronGeometry(1, 3);
     this.material = dropletMaterial();
     this.mesh = new THREE.InstancedMesh(this.geom, this.material, MAX_DROPS);
     this.mesh.frustumCulled = false;
@@ -95,6 +138,7 @@ export class DropletSystem {
       this.drops.push({
         live: false, x: 0.5, y: 0.5, z: 0, vz: 0, r: 0,
         vol: 0, absorbance: [0, 0, 0], color: new THREE.Color(1, 1, 1), age: 0,
+        phase: 'done', phaseT: 0, released: 0,
       });
     }
     this.hideAll();
@@ -124,6 +168,9 @@ export class DropletSystem {
     d.absorbance = inkAbsorbance(color, 1.0);
     d.color.setRGB(color[0], color[1], color[2]);
     d.age = 0;
+    d.phase = 'fall';
+    d.phaseT = 0;
+    d.released = 0;
   }
 
   /** Live drop count — used by the tests and the hint text. */
@@ -132,50 +179,132 @@ export class DropletSystem {
   }
 
   /**
-   * Advance every drop. `onLand` fires once per drop as it reaches the water,
-   * carrying everything the dye field and wave solver need.
+   * Advance every drop.
+   *
+   * `onLand` fires once at the moment of contact (driving the surface impulse
+   * and the first pigment), then `onRelease` trickles the remaining volume
+   * out over the following frames as the drop spreads into a film.
    */
   step(
     dt: number,
     uvToWorld: (u: number, v: number) => { x: number; z: number },
     onLand: (u: number, v: number, radius: number, volume: number, absorbance: [number, number, number]) => void,
+    onRelease: (u: number, v: number, radius: number, volume: number, absorbance: [number, number, number]) => void,
   ): void {
     let anyVisible = false;
     for (let i = 0; i < MAX_DROPS; i++) {
       const d = this.drops[i];
       if (!d.live) {
+        // Collapse the instance rather than skipping it. Skipping left the
+        // matrix from the drop's last frame in place, so a finished drop stayed
+        // frozen on screen — releasing a new one then appeared alongside the
+        // stale ones instead of alone.
+        this.dummy.position.set(0, -999, 0);
+        this.dummy.scale.setScalar(0);
+        this.dummy.updateMatrix();
+        this.mesh.setMatrixAt(i, this.dummy.matrix);
         continue;
       }
       d.age += dt;
 
-      // Ballistic fall with drag. Gravity is scaled down so the drop is
-      // watchable rather than arriving in two frames — the fall is part of
-      // the pleasure of using it, so it must be legible.
-      const G = 3.2;
-      d.vz -= G * dt;
-      d.vz *= 1 - Math.min(0.85, 0.55 * dt);
-      d.z += d.vz * dt;
+      if (d.phase === 'fall') {
+        // Ballistic fall with drag. Gravity is scaled so the fall stays
+        // watchable rather than completing in two frames — the fall is part
+        // of the pleasure of using it, so it has to be legible.
+        const G = 3.2;
+        d.vz -= G * dt;
+        d.vz *= 1 - Math.min(0.85, 0.55 * dt);
+        d.z += d.vz * dt;
 
-      if (d.z <= 0) {
-        // IMPACT
-        onLand(d.x, d.y, d.r, d.vol, d.absorbance);
-        d.live = false;
-        continue;
+        if (d.z <= 0) {
+          // CONTACT. Deform the surface and kick a ring out from the impact,
+          // but keep the drop itself alive: it is now a spreading film.
+          d.z = 0;
+          d.phase = 'merge';
+          d.phaseT = 0;
+          onLand(d.x, d.y, d.r, d.vol, d.absorbance);
+        }
+      } else {
+        d.phaseT += dt;
+        // Release the pigment progressively. Pouring the whole volume on the
+        // contact frame drops a solid blob; trickling it out as the drop
+        // flattens lays down the denser core first and lets the flow carry it,
+        // which is what produces branching filaments instead of a puddle.
+        const want = Math.min(1, d.phaseT / SPREAD_TIME);
+        const chunk = Math.max(0, want - d.released);
+        if (chunk > 0) {
+          d.released = want;
+          onRelease(d.x, d.y, d.r, chunk * d.vol, d.absorbance);
+        }
+        if (d.phaseT >= SPREAD_TIME) {
+          d.live = false;
+          // Collapse this frame's matrix too, or the last spread frame lingers.
+          this.dummy.position.set(0, -999, 0);
+          this.dummy.scale.setScalar(0);
+          this.dummy.updateMatrix();
+          this.mesh.setMatrixAt(i, this.dummy.matrix);
+          continue;
+        }
       }
 
       anyVisible = true;
       const w = uvToWorld(d.x, d.y);
-      // A falling drop stretches along its direction of travel: teardrop, not
-      // bead. Stretch grows with speed and settles back once it slows.
-      const speed = Math.abs(d.vz);
-      const stretch = 1 + Math.min(1.6, speed * 0.55);
-      this.dummy.position.set(w.x, SURFACE_Y + d.z, w.z);
-      this.dummy.scale.set(d.r, d.r * stretch, d.r);
+
+      // Shape by phase. Falling: a teardrop stretched along travel. On contact
+      // it squashes hard against the surface and spreads sideways — a lens,
+      // not a sphere — then thins away.
+      let sx = d.r;
+      let sy = d.r;
+      let sz = d.r;
+      let lift = d.z;
+
+      if (d.phase === 'fall') {
+        const speed = Math.abs(d.vz);
+        sy = d.r * (1 + Math.min(1.6, speed * 0.55));
+        // A faster drop is a longer drop, not just a bigger one.
+        sx = sz = d.r * (1 - Math.min(0.28, speed * 0.085));
+      } else {
+        const t = Math.min(1, d.phaseT / SPREAD_TIME);
+        // On contact the drop COLLAPSES INTO the surface, it does not spread
+        // across it.
+        //
+        // This previously widened the instance to over five times its radius
+        // while it was still fully opaque, so the moment a drop landed it
+        // stamped a solid coloured disc on the water and then sat there. That
+        // is not what a drop does: it is absorbed almost instantly, and the
+        // only thing that genuinely spreads afterwards is the pigment, which
+        // the dye field already handles.
+        //
+        // So the mesh now flattens fast and then shrinks away to nothing,
+        // with its colour desaturating toward the water as it goes. The spread
+        // you see is the ink, not the drop.
+        if (d.phase === 'merge') {
+          const mt = Math.min(1, d.phaseT / MERGE_TIME);
+          sy = d.r * (1 - 0.80 * mt);
+          sx = sz = d.r * (1 + 0.35 * mt);
+        } else {
+          // dissolve: shrink and flatten away
+          sy = d.r * 0.20 * (1 - t);
+          sx = sz = d.r * (1.35 - 1.25 * t);
+        }
+      }
+
+      this.dummy.position.set(w.x, SURFACE_Y + lift + sy * 0.5, w.z);
+      this.dummy.scale.set(sx, sy, sz);
       this.dummy.rotation.set(0, 0, 0);
       this.dummy.updateMatrix();
       this.mesh.setMatrixAt(i, this.dummy.matrix);
-      // instanceColor carries the drop's real pigment
-      this.mesh.setColorAt(i, d.color);
+      // instanceColor carries the drop's real pigment, fading toward the water
+      // as it dissolves so no opaque disc is left lying on the surface
+      if (d.phase === 'fall') {
+        this.mesh.setColorAt(i, d.color);
+      } else {
+        // blend the pigment toward the water as it collapses, so the disc
+        // dissolves instead of sitting there fully saturated
+        const t = Math.min(1, d.phaseT / SPREAD_TIME);
+        this.tmpColor.copy(d.color).lerp(WATER_TINT, t * 0.85);
+        this.mesh.setColorAt(i, this.tmpColor);
+      }
     }
 
     this.mesh.instanceMatrix.needsUpdate = true;

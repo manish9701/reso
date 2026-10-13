@@ -23,6 +23,39 @@ const DEFAULT_FREQ = 4.5;
 /** Constant drive level — the slider is frequency only, per the spec. */
 const DRIVE_LEVEL = 0.85;
 
+/**
+ * Audible pitch for a vessel resonance.
+ *
+ * The dish's real modes sit at 1.7–12 Hz. Human hearing starts at 20 Hz, so
+ * feeding that straight to the oscillator produced sound nobody can consciously
+ * hear — an infrasonic pressure you feel rather than hear, which is exactly
+ * the "sound that kills your ears".
+ *
+ * So the tone is a LISTENING representation of the mode, not the mode itself:
+ * the physics still runs at the true frequency, and the pitch is mapped onto
+ * a pentatonic scale across three octaves. Pentatonic is the important choice
+ * — every note the slider can reach is consonant with every other, so sweeping
+ * the whole range never produces a dissonance, which a chromatic scale would
+ * do constantly.
+ */
+const PENTATONIC = [0, 3, 5, 7, 10];   // semitones: minor pentatonic
+const AUDIO_ROOT = 196.0;             // G3
+const NOTE_NAMES = ['C', 'D', 'E', 'G', 'A'];
+
+function noteFor(freqHz: number): { hz: number; name: string } {
+  const lo = Math.log(BANK_FREQ_MIN);
+  const hi = Math.log(BANK_FREQ_MAX);
+  const t = clamp((Math.log(freqHz) - lo) / (hi - lo), 0, 1);
+  const steps = 3 * PENTATONIC.length;
+  const idx = Math.round(t * steps);
+  const oct = Math.floor(idx / PENTATONIC.length);
+  const semi = PENTATONIC[idx % PENTATONIC.length];
+  return {
+    hz: AUDIO_ROOT * Math.pow(2, oct + semi / 12),
+    name: `${NOTE_NAMES[idx % PENTATONIC.length]}${3 + oct}`,
+  };
+}
+
 export default function Cymatics() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<LabEngine | null>(null);
@@ -127,8 +160,10 @@ export default function Cymatics() {
   // keep the live tone in sync with the slider
   useEffect(() => {
     freqRef.current = freq;
-    if (source === 'tone') void audioRef.current.startTone(freq, amplitude);
-    else audioRef.current.setTone(freq, amplitude);
+    // The oscillator gets the AUDIBLE pitch; the simulation keeps the true
+    // resonance. Driving the speaker at 4.5 Hz is not music, it is infrasound.
+    if (source === 'tone') void audioRef.current.startTone(noteFor(freq).hz, amplitude);
+    else audioRef.current.setTone(noteFor(freq).hz, amplitude);
   }, [freq, amplitude, source]);
   useEffect(() => { ampRef.current = amplitude; }, [amplitude]);
   useEffect(() => { pigmentRef.current = pigment; }, [pigment]);
@@ -211,7 +246,7 @@ export default function Cymatics() {
     if (source === kind) { audio.stop(); setSource(null); setMessage('Input released. The surface settles.'); return; }
     try {
       if (kind === 'tone') {
-        await audio.startTone(freqRef.current, amplitude);
+        await audio.startTone(noteFor(freqRef.current).hz, amplitude);
         setSource('tone');
         setMessage('Tone driving. Slide frequency — the figure snaps between resonances.');
       } else if (kind === 'mic') {
@@ -259,7 +294,8 @@ export default function Cymatics() {
       <div className="rail rail-left">
         <span className="rail-label">Frequency</span>
         <div className="freq-readout">
-          <strong>{freq.toFixed(2)}</strong> <em>Hz</em>
+          <strong>{freq.toFixed(2)}</strong> <em>Hz</em>{
+          <span className="note-name">{noteFor(freq).name}</span>}
         </div>
         <input
           className="freq-slider"
@@ -322,7 +358,7 @@ export default function Cymatics() {
         ))}
       </div>
 
-      {/* bottom-left utility cluster: clear + save + mic */}
+      {/* bottom-left utility cluster: clear + save */}
       <div className="rail rail-utils">
         <button className="round-btn ghost" onClick={clear} aria-label="Clear pigment" title="Clear the pigment">
           <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -333,12 +369,6 @@ export default function Cymatics() {
           <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
             <path d="M3 2.8A1.8 1.8 0 0 1 4.8 1h5L13 4.2v9A1.8 1.8 0 0 1 11.2 15H4.8A1.8 1.8 0 0 1 3 13.2z" fill="none" stroke="currentColor" strokeWidth="1.3" />
             <path d="M5.4 1.6v3.6H10M5.6 10.2h4.8M5.6 12.4h3" stroke="currentColor" strokeWidth="1.3" fill="none" />
-          </svg>
-        </button>
-        <button className={`round-btn ghost${source === 'mic' ? ' live' : ''}`} onClick={() => void pickSource('mic')} aria-pressed={source === 'mic'} aria-label="Listen to the microphone" title="Drive from your microphone">
-          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-            <rect x="6" y="1.5" width="4" height="8" rx="2" fill="currentColor" />
-            <path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
           </svg>
         </button>
       </div>

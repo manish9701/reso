@@ -126,7 +126,7 @@ float besselJ(int m, float x) {
 export const FIGURE_FS = /* glsl */ `
 precision highp float;
 varying vec2 vUv;
-uniform vec4 uModes[6];   // x = m, y = k·R, z = amplitude, w = breathing phase
+uniform vec4 uModes[4];   // x = m, y = kR, z = amplitude, w = breathing phase
 ${BESSEL_GLSL}
 
 void main() {
@@ -141,8 +141,8 @@ void main() {
   // (which is what makes the figure interesting) simply drives the surface
   // harder and harder until it clips into hard-edged wedges.
   float live = 0.0;
-  for (int i = 0; i < 6; i++) live += step(1e-5, abs(uModes[i].z));
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 4; i++) live += step(1e-5, abs(uModes[i].z));
+  for (int i = 0; i < 4; i++) {
     vec4 M = uModes[i];
     if (abs(M.z) < 1e-5) continue;
     int m = int(M.x + 0.5);
@@ -336,7 +336,19 @@ void main() {
   // settling force, which is what real powder does.
   vec2 gradShape2 = vec2(fR.g * fR.g - fL.g * fL.g,
                          fU.g * fU.g - fD.g * fD.g);
-  flow -= uGather * gradShape2 * 64.0;
+  // Nodal settling, in per-uv units rather than per-texel.
+  //
+  // Dividing by the texel size (as this once did) made the term scale with
+  // resolution: at 1024² it was orders of magnitude stronger than the
+  // surrounding flow, so pigment SNAPPED onto the nodes and froze into flat
+  // plates with hard cut edges instead of drifting there and settling.
+  // That is what made the pour read as flat coloured shapes rather than the
+  // fine branching filaments a real plate builds up.
+  //
+  // The factor below is calibrated so a drop visibly migrates toward a node
+  // over a few seconds — long enough for the flow to stretch and fold it on the
+  // way, which is what produces filaments rather than blobs.
+  flow -= uGather * gradShape2 * 9.0;
 
   // ---- ambient turbulence: multi-octave curl noise --------------------
   // This is what makes pigment look like a real fluid rather than a few

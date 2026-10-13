@@ -20,7 +20,7 @@ import * as THREE from 'three';
 import { Studio } from './studio';
 import { createDishGeometry, createDishMaterial } from './dish';
 import { createLiquidGeometry, createLiquidMaterial, LIQUID_R, LIQUID_Y, type LiquidUniforms } from './liquid';
-import { ResonanceModel } from '../sim/resonance';
+import { ResonanceModel, type ModeSlot } from '../sim/resonance';
 import { WaveSimulation, SIM_SIZE } from '../sim/wave';
 import { FigureField, FIGURE_GAIN } from '../sim/figure';
 import { PigmentSimulation, DYE_SIZE } from '../sim/pigment';
@@ -105,6 +105,13 @@ export class LabEngine {
   forcedDrive: { freq: number; level: number } | null = null;
   noForce = false;
   noImp = false;
+  /** Development/profiling switches — see scripts/profile.mjs. */
+  __noWave = false;
+  __noDye = false;
+  noFigure = false;
+  /** True when the standing figure needs re-rendering this frame. */
+  figureDirty = true;
+  private __lastSlots: ModeSlot[] | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -259,21 +266,45 @@ export class LabEngine {
     u: number, v: number, radius: number, volume: number,
     absorbance: [number, number, number],
   ): void => {
+// Contact disturbance: a narrow ring travels outward from where the drop
+    // landed.
+    //
+    // There is deliberately NO negative impulse here. An earlier version
+    // pushed the surface DOWN first, on the reasoning that a drop's weight
+    // makes a dimple — but that dimple persists as a visible circular crater
+    // ringed on the water, which is exactly the artefact that looked wrong.
+    // A drop landing on water reads as a quick expanding ripple, not a hole.
+    this.wave.addImpulse(u, v, 1.15 * volume, Math.max(1e-6, (radius * 1.15) ** 2));
+    // Only a first, dense slice of pigment is released at the contact frame;
+    // the rest trickles out as the drop spreads. Dumping the whole volume in
+    // one go drops a solid blob rather than laying down a core.
+    this.releaseDrop(u, v, radius, volume * 0.35, absorbance);
+  };
+
+  /** A slice of a drop's pigment entering the water as it spreads. */
+  private releaseDrop = (
+    u: number, v: number, radius: number, volume: number,
+    absorbance: [number, number, number],
+  ): void => {
+    if (volume <= 0) return;
     this.pigment.enqueue({
       x: u,
       y: v,
-      // A drop that has fallen spreads wider than it was, and wider than a
-      // brush dab: it is a volume of liquid dispersing into water.
-      // A fallen drop disperses, but not uniformly: the pigment core stays dense
-      // and only its edge feathers out. The old 2.6x spread thinned every drop
-      // until nothing in the dish ever reached full saturation (measured at
-      // 0% of pixels vs the reference's 11%). Deposit a concentrated core with
-      // a modest halo so dense colour actually exists.
+      // A falling drop carries a concentrated core and only a feathered edge.
+      // Depositing dense and letting the flow spread it is what produces
+      // branching filaments instead of a flat puddle.
       radius: radius * 1.55,
       amount: volume,
       absorbance,
     });
-    this.wave.addImpulse(u, v, 1.1 * volume, Math.max(1e-5, (radius * 2.2) ** 2));
+  };
+
+  /** The trickle phase: the rest of a drop's volume, released progressively. */
+  private onDropRelease = (
+    u: number, v: number, radius: number, volume: number,
+    absorbance: [number, number, number],
+  ): void => {
+    this.releaseDrop(u, v, radius, volume, absorbance);
   };
 
   /** Remove pigment locally without touching the wave state. */
@@ -327,7 +358,7 @@ export class LabEngine {
 
     // 0. droplets fall first, so a landing this frame is picked up by the
     //    wave and pigment passes below in the same tick
-    this.droplets.step(dt, this.dropletUvToWorld, this.onDropLand);
+    this.droplets.step(dt, this.dropletUvToWorld, this.onDropLand, this.onDropRelease);
 
     // 1. audio → modal amplitudes (built up / decayed continuously)
     const slots = this.noForce
@@ -342,14 +373,24 @@ export class LabEngine {
       const lambda = (2 * kR) * (2 * kR) + (2 * m) * (2 * m); // mode wavenumber²
       this.breath = (this.breath + Math.sqrt(Math.max(1, lambda)) * 0.22 * dt) % (Math.PI * 2);
     }
-    this.figure.render(r, slots, this.breath);
+    // The figure field is recomputed only when the modal state has actually
+    // moved. At a steady tone the amplitudes converge and the pattern stops
+    // changing; re-evaluating six Bessel modes to an identical result every
+    // frame is pure waste, and this pass is one of the more expensive ones.
+    if (this.figureDirty && !this.noFigure) {
+      this.figure.render(r, slots, this.breath);
+      this.figureDirty = slots !== this.__lastSlots;
+      this.__lastSlots = slots;
+    }
 
     // 3. travelling-wave grid (strikes/drags; fixed substeps, capped catch-up)
-    this.wave.step(r, dt, {
-      tension: this.sim.tension,
-      damp: (1 - this.sim.damp) * 20 + 0.6,
-      wall: 1.4,
-    });
+    if (!this.__noWave) {
+      this.wave.step(r, dt, {
+        tension: this.sim.tension,
+        damp: (1 - this.sim.damp) * 20 + 0.6,
+        wall: 1.4,
+      });
+    }
 
     // 4. combine figure + ripples into the single field the surface samples
     (this.combine.material.uniforms.uWave as { value: THREE.Texture }).value = this.wave.texture;
@@ -366,7 +407,7 @@ export class LabEngine {
     // the fine detail is worth the slight spread.
     const stir = (0.0009 + Math.min(1, Math.log2(Math.max(1, this.drive.freq) / 2) / 3.4) * 0.0042
       + Math.min(1, this.drive.level) * 0.0026) * (0.4 + this.sim.visc);
-    this.pigment.step(r, dt, {
+    if (!this.__noDye) this.pigment.step(r, dt, {
       // gather is the stream-function coefficient: it scales |∂φ/∂xy|, so it
       // must stay small or the surface churns and the ink dilutes to haze
       // Chladni migration, the term that actually DRAWS the figure. This has

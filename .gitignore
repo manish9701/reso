@@ -21,3 +21,6 @@ lab_check.js
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# temporary local benchmark copy
+scripts/_bench_tmp.mjs
