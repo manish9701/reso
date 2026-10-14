@@ -14,10 +14,11 @@ import * as THREE from 'three';
 import { FullscreenPass, makeTarget } from './pass';
 import { DYE_FS } from './shaders';
 
-/** Default pigment buffer edge (px). The engine passes a TIER-specific size
- *  (1024 on a discrete GPU, 640 on the lean/integrated tier) — the advection
- *  pass scales with texel count, and the figure's own 512² already carries the
- *  fine structure. */
+/** Default pigment buffer edge (px), used when no size is given.
+ *  In practice the engine always passes the tier-specific size from
+ *  quality.ts — 1024 on a discrete GPU, 768 on the lean/integrated one — since
+ *  the advection pass scales with texel count and the figure's own 512² already
+ *  carries the fine structure. */
 export const DYE_SIZE = 768;
 
 export interface DyeParams {

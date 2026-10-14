@@ -2,9 +2,9 @@
  * Vessel — a real cross-section lathed into a solid (guide §5).
  *
  * The reference for this build is a polished stainless dish: rounded bottom
- * edge, a rising outer wall, a thick rolled crown, an inner wall descending
- * to a shallow floor, and machined bevels everywhere a perfectly sharp edge
- * would read as computer-generated.
+ * edge, a rising outer wall, a thick rolled crown with a proper chamfer into
+ * the inner wall, and machined bevels everywhere a perfectly sharp edge would
+ * read as computer-generated.
  *
  * Material: TRUE physically based metal — MeshPhysicalMaterial with
  * metalness 1.0 and a roughness tuned inside the 0.18–0.30 window. A metal
@@ -23,8 +23,8 @@ export const DISH_R = 1.0;
 /**
  * Cross-section: [radius, height], from the outer floor centre to the inner
  * floor centre. Substantial but not cauldron-like: the crown is a ~0.05·R
- * thick rolled lip with a rounded crown and a proper chamfer into the inner
- * wall, so reflections wrap around the rim instead of appearing painted on.
+ * thick rolled lip with a rounded crown and a chamfer into the inner wall, so
+ * reflections wrap around the rim instead of appearing painted on.
  */
 const PROFILE: Array<[number, number]> = [
   [0.000, 0.000],
@@ -87,7 +87,7 @@ export function createDishGeometry(segments = 320): THREE.BufferGeometry {
  * within ±0.035 of the base roughness so the material keeps its coherent
  * PBR response and the reflections stay clean silver with soft edges.
  */
-function brushedTexture(size = 1024, baseRough = 0.24): THREE.CanvasTexture {
+function brushedTexture(size = 1024, baseRough = 0.235): THREE.CanvasTexture {
   const cn = document.createElement('canvas');
   cn.width = cn.height = size;
   const ctx = cn.getContext('2d')!;
@@ -114,7 +114,7 @@ function brushedTexture(size = 1024, baseRough = 0.24): THREE.CanvasTexture {
       // fine intra-strand grain: barely-there variation along the streak
       const fx = Math.sin(x * 0.021 + y * 0.0007) * 0.012 + Math.sin(x * 0.007 - y * 0.0023) * 0.01;
       let r = g + fx;
-      // vignette into the user-requested window: keep roughness sane
+      // vignette into the documented window: keep roughness sane
       r = Math.min(0.30, Math.max(0.18, r));
       // roughnessMap uses the GREEN channel; same texture doubles as a very
       // low-amplitude bump (luminance) for micro-parallax grazing response
@@ -142,12 +142,19 @@ function brushedTexture(size = 1024, baseRough = 0.24): THREE.CanvasTexture {
  * grain, and the generated brushed map above. The material IS the metal's
  * albedo/roughness response — the reflected silver/charcoal/copper bands
  * come from the studio environment, not from anything painted here.
+ *
+ * Roughness is the one number that was out of its own spec: at 0.10 the crown
+ * is a true mirror, so the overhead softbox lands on it as one clipped white
+ * arc, the rim reads as glowing plastic, and the flat inner floor mirrors the
+ * studio instruments as hard radial spokes converging on the lathe centre —
+ * the single most CG-looking thing in the frame. At 0.235 the same instruments
+ * spread into the brushed sweeps the reference actually shows.
  */
 export function createDishMaterial(): {
   material: THREE.MeshPhysicalMaterial;
   brushed: THREE.CanvasTexture;
 } {
-  const brushed = brushedTexture(1024, 0.24);
+  const brushed = brushedTexture(1024, 0.235);
   const mat = new THREE.MeshPhysicalMaterial({
     // Neutral stainless. The colour of a metal is its specular tint; steel
     // reads as slightly cool. Warmth in the reference comes from the studio's

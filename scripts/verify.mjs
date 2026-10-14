@@ -111,8 +111,11 @@ await page.screenshot({ path: OUT + '\\rt-3-pigment.png' });
 // sweep frequency — the figure must REORGANISE, not just wiggle: the dominant
 // modal fingerprint (m | k·R) must change across the sweep, which is what
 // makes different frequencies produce genuinely different nodal structures.
+// Sweep points sit inside the MEASURED visible band (224–836 Hz), where the
+// water actually responds; outside it the drive clamps and the figure
+// correctly holds.
 const fingerprints = [];
-const EX_SETUP = [110, 165, 262, 349, 523, 784];   // excitation Hz (UI world)
+const EX_SETUP = [226, 320, 430, 600, 830];   // excitation Hz (UI world)
 for (const hz of EX_SETUP) {
   await page.evaluate((f) => { window.__lab.forcedDrive = { freq: f, level: 0.85 }; }, hz);
   await sleep(3000);
@@ -122,7 +125,7 @@ for (const hz of EX_SETUP) {
   await page.screenshot({ path: `${OUT}\\rt-4-swept-${hz}.png` });
 }
 const unique = new Set(fingerprints).size;
-if (unique < 4) errors.push(`SIM: figures too similar across the sweep (${unique}/6 distinct)`);
+if (unique < 4) errors.push(`SIM: figures too similar across the sweep (${unique}/5 distinct)`);
 
 console.log('ERRORS:', errors.length ? errors.slice(0, 6) : 'none');
 await browser.close();

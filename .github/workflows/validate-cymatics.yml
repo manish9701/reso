@@ -3,7 +3,7 @@ name: Validate Cymatics
 on:
   push:
     branches:
-      - cymatics-only-experience
+      - main
   pull_request:
     branches:
       - main

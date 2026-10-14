@@ -52,7 +52,7 @@ const MAX_SUBSTEPS = 16;
  * overshooting does not degrade gracefully — the field rails and the surface
  * turns to hard geometric shards.
  */
-const C2_BASE = 100000;
+const C2_BASE = 52000;
 
 export interface WaveParams {
   /** 0..1 UI Surface Tension → wave speed */

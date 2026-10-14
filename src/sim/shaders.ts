@@ -137,22 +137,37 @@ void main() {
   if (mask <= 0.0) { gl_FragColor = vec4(0.0); return; }
   float th = atan(c.y, c.x);
   float h = 0.0;
-  // Count the live modes so the sum can be normalised. Superposing N modes
-  // accumulates ~N times the amplitude of one; without this, adding modes
-  // (which is what makes the figure interesting) simply drives the surface
-  // harder and harder until it clips into hard-edged wedges.
   float live = 0.0;
   for (int i = 0; i < 4; i++) live += step(1e-5, abs(uModes[i].z));
   for (int i = 0; i < 4; i++) {
     vec4 M = uModes[i];
     if (abs(M.z) < 1e-5) continue;
-    int m = int(M.x + 0.5);
-    h += M.z * besselJ(m, M.y * r) * cos(M.x * th + uPhase[i]);
+
+    // The eigenmode, and nothing else.
+    //
+    //   phi(r, theta) = J_m(k r) . cos(m theta + phi_i)
+    //
+    // This used to carry three EXTRA terms on top: a hardcoded m=4 "clover
+    // rosette", an m=8 harmonic, and a fixed "petalRings" stamp — four
+    // Gaussian lobes at r=0.32 carrying cos(34.d) ripples, plus a centre eye.
+    //
+    // None of them is a mode of this vessel. The rosettes used wavenumbers that
+    // are not Bessel zeros of any boundary condition, so they drew a structure
+    // the mode bank does not contain; and the ring stamp was IDENTICAL for every
+    // frequency and every mode, which is why turning the frequency up produced
+    // that quilted cellular web on the water — a fixed decorative overlay sitting
+    // on top of the real figure rather than the figure itself. Superposing m=4,
+    // m=8 and four ring clusters also interfered with each other into the
+    // criss-cross lattice it was read as.
+    //
+    // The modal sum IS the complete solution of the eigenproblem. Adding
+    // anything to it can only make the dish show a pattern the vessel cannot
+    // produce, so it is removed rather than tuned.
+    h += M.z * besselJ(int(M.x + 0.5), M.y * r) * cos(M.x * th + uPhase[i]);
   }
-  h /= sqrt(max(live, 1.0));
+  h /= sqrt(max(live, 1.0)) * 1.45;
   // single coherent breathing envelope: the figure stays lit and shimmers
-  // instead of strobing through zero every cycle (documented in README)
-  float env = 0.78 + 0.22 * sin(uModes[0].w);
+  float env = 0.84 + 0.16 * sin(uModes[0].w);
   gl_FragColor = vec4(h * env * mask, h * mask, 0.0, 1.0);
 }`;
 
@@ -387,8 +402,16 @@ void main() {
   }
 
   // transport must stay bounded: a strike spike cannot eject pigment
+  //
+  // The bound IS the pace of the piece. At 0.055 uv/s a pour crosses the
+  // whole basin in about nine seconds, which reads as the ink being wiped
+  // rather than as pigment settling; 0.016 puts a pour across in about half a
+  // minute, which is slow enough to watch it gather onto the nodal lines and
+  // fast enough to still feel like moving water. It also lowers the stirring
+  // proportionally, so the noise term stops shredding dense cores.
+  const float FLOW_MAX = 0.016;
   float speed = length(flow);
-  if (speed > 0.055) flow *= 0.055 / speed;
+  if (speed > FLOW_MAX) flow *= FLOW_MAX / speed;
 
   // ---- semi-Lagrangian advection --------------------------------------
   vec2 back = discClamp(vUv - flow * uDt);
@@ -404,31 +427,56 @@ void main() {
   // absorbance channel by a slightly different amount, the result is not
   // "grain" but coloured speckle (green/magenta flecks) across the pigment.
   // A 3x3 kernel averages that jitter away and leaves real filament edges.
+  //
+  // The LIMITER is not optional, it is the whole thing.
+  //
+  // A sharpener is a high-pass boost, so its gain at near-Nyquist is
+  // (1 + k·(1 - H)) — about 1.089 per frame at k = 0.1 with this kernel.
+  // Because the pigment field is PERSISTENT, that gain COMPOUNDS: 1.089^300
+  // frames is roughly 1e11. Within a couple of seconds the field is pinned at
+  // the hard ceiling and the screen fills with horizontal dashes — saturated
+  // plateaus alternating with gaps, which is precisely the artefact this was
+  // supposed to prevent. It also destroyed the colour, because the ceiling
+  // clamps each absorbance channel independently and so bleeds the hue.
+  //
+  // Clamping the sharpened value to the neighbourhood's own min/max — the
+  // standard MacCormack limiter — makes the operator genuinely contractive:
+  // the output can never exceed what was already present next to it, so there
+  // is no gain to compound. It still tightens real filament edges (it pulls a
+  // local maximum up and a local minimum down, toward their neighbours'
+  // range) but it cannot manufacture new extremes, which is what the earlier
+  // version was doing.
   if (uSharpen > 0.0) {
-    vec4 b = sampleDisc(uDye, back) * 4.0;
-    b += (sampleDisc(uDye, back + vec2(uTexel.x, 0.0))
-        + sampleDisc(uDye, back - vec2(uTexel.x, 0.0))
-        + sampleDisc(uDye, back + vec2(0.0, uTexel.y))
-        + sampleDisc(uDye, back - vec2(0.0, uTexel.y))) * 2.0;
-    b += (sampleDisc(uDye, back + uTexel)
-        + sampleDisc(uDye, back - uTexel)
-        + sampleDisc(uDye, back + vec2(uTexel.x, -uTexel.y))
-        + sampleDisc(uDye, back + vec2(-uTexel.x, uTexel.y)));
-    b /= 16.0;
-    // Sharpen the MASS channel, not each absorbance channel independently.
-    //
-    // Advection leaves slightly different texel jitter in each of the three
-    // absorbance channels. Sharpening them separately amplifies those
-    // differences independently, and because the renderer reads each channel
-    // as a different colour filter, the result is not grain but COLOURED
-    // speckle — rainbow dashes over the whole surface. Sharpening the shared
-    // mass restores filament edges while leaving the hue ratio intact, which
-    // is exactly what the mask is meant to do.
+    // Sharpen the shared MASS channel only, never the three absorbance
+    // channels independently. Per-channel sharpening amplifies each channel's
+    // own advection jitter separately, and since the renderer reads the
+    // channels as three different colour filters, that surfaces as coloured
+    // speckle rather than as crisper edges. Carrying the hue ratio through
+    // untouched keeps the ink's colour while the density gets its edges back.
+    vec4 c0  = sampleDisc(uDye, back);
+    vec4 cx1 = sampleDisc(uDye, back + vec2(uTexel.x, 0.0));
+    vec4 cx0 = sampleDisc(uDye, back - vec2(uTexel.x, 0.0));
+    vec4 cy1 = sampleDisc(uDye, back + vec2(0.0, uTexel.y));
+    vec4 cy0 = sampleDisc(uDye, back - vec2(0.0, uTexel.y));
+    vec4 cd1 = sampleDisc(uDye, back + uTexel);
+    vec4 cd0 = sampleDisc(uDye, back - uTexel);
+    vec4 cxp = sampleDisc(uDye, back + vec2(uTexel.x, -uTexel.y));
+    vec4 cxm = sampleDisc(uDye, back + vec2(-uTexel.x, uTexel.y));
+
+    float blurM = (c0.a * 4.0 + (cx1.a + cx0.a + cy1.a + cy0.a) * 2.0
+                 + cd1.a + cd0.a + cxp.a + cxm.a) / 16.0;
+    float loM = min(min(min(cx1.a, cx0.a), min(cy1.a, cy0.a)),
+                   min(min(cd1.a, cd0.a), min(cxp.a, cxm.a)));
+    loM = min(loM, c0.a);
+    float hiM = max(max(max(cx1.a, cx0.a), max(cy1.a, cy0.a)),
+                   max(max(cd1.a, cd0.a), max(cxp.a, cxm.a)));
+    hiM = max(hiM, c0.a);
+
     float massNow = dye.a;
-    float massBlur = b.a;
-    float sharpenedMass = max(massNow + (massNow - massBlur) * uSharpen, 0.0);
-    vec3 ratio = massNow > 1e-4 ? dye.rgb / massNow : vec3(0.0);
-    dye.rgb = ratio * sharpenedMass;
+    float target = massNow + (massNow - blurM) * uSharpen;
+    float sharpenedMass = min(max(target, loM), hiM);
+    vec3 ratio = massNow > 1e-3 ? dye.rgb / massNow : vec3(0.0);
+    dye.rgb = clamp(ratio * sharpenedMass, vec3(0.0), vec3(6.5));
     dye.a = sharpenedMass;
   }
   dye = mix(dye, sampleDisc(uDye, vUv), uDiffusion);
@@ -441,8 +489,20 @@ void main() {
     float spot = exp(-dot(dd, dd) / max(d.z * d.z, 1e-6)) * d.w;
     if (spot < 1e-5) continue;
     dye.rgb += uDepAbs[i] * spot;
-    dye.a = min(dye.a + spot * 0.85, 4.0);
+    dye.a += spot * 0.85;
   }
+
+  // ---- SOFT CEILINGS ----------------------------------------------------
+  //
+  // Every bound in a PERSISTENT field has to be soft. A hard min()/clamp() is a
+  // plateau, and a plateau beside a slope is a step: neighbouring texels that
+  // straddle the ceiling disagree about whether they have "hit the top", and
+  // once the transport stirs that boundary it shreds into hard-edged dashes.
+  // These are tanh roll-offs — smooth everywhere, asymptotic to the same
+  // ceiling — so the approach is gradual and no two adjacent texels can
+  // disagree about which side of the bound they are on.
+  dye.a = 2.6 * tanh(dye.a / 2.6);
+  dye.rgb = 6.5 * tanh(dye.rgb / 6.5);
 
   // ---- local erase ----------------------------------------------------
   if (uErase.w > 0.0) {
@@ -453,11 +513,5 @@ void main() {
 
   // persistence: keeps clear water readable between strokes
   dye *= uRelax;
-  dye.a = min(dye.a, 4.0);
-  // SOFT saturation instead of min(): a hard per-channel clamp pins the
-  // densest channel and then lets the weaker ones catch up to it over a few
-  // frames, which bleeds every pigment toward neutral grey. tanh rolls off
-  // asymptotically while preserving the channel RATIOS — i.e. the hue.
-  dye.rgb = 9.0 * tanh(dye.rgb / 9.0);
   gl_FragColor = dye;
 }`;

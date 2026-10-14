@@ -33,23 +33,16 @@ export interface LiquidUniforms {
   uR: { value: number };
   uAmp: { value: number };
   uNormalGain: { value: number };
-  uWater: { value: THREE.Vector3 };
-  uCaustics: { value: number };
-  uCausticK: { value: number };
   uDepth: { value: number };
   uNodal: { value: number };
   uRefract: { value: number };
-  /** overall weight of the analytic refracted-basin term */
-  uRefractGain: { value: number };
   uInkDensity: { value: THREE.Vector2 };
   uTime: { value: number };
   uMicro: { value: number };
   /** fraction of the shading relief the refracted path follows */
   uReliefMix: { value: number };
-  /** caustic self-shadowing strength */
-  uShadowMix: { value: number };
   uDebug: { value: number };
-  /** 1 = lean/integrated tier: skip optional per-pixel work */
+  /** lean-tier toggle, surfaced from quality.ts (see the engine constructor) */
   uLean: { value: number };
 }
 
@@ -58,7 +51,7 @@ export interface LiquidUniforms {
  *  ripples and the standing relief read as a continuous surface rather
  *  than a faceted polygon — the silhouette against the dish wall is what
  *  gives the water away if it is too coarse. */
-export function createLiquidGeometry(radius = LIQUID_R, rings = 256, segments = 320): THREE.BufferGeometry {
+export function createLiquidGeometry(radius = LIQUID_R, rings = 320, segments = 384): THREE.BufferGeometry {
   const positions = new Float32Array((rings + 1) * segments * 3);
   const normals = new Float32Array((rings + 1) * segments * 3);
   const index: number[] = [];
@@ -103,31 +96,19 @@ uniform vec2 uTexel;
 uniform float uR;
 uniform float uAmp;
 uniform float uNormalGain;
-uniform vec3 uWater;
-uniform float uCaustics;
-uniform float uCausticK;
 uniform float uDepth;
 uniform float uNodal;
 uniform float uRefract;
-uniform float uRefractGain;
 uniform vec2 uInkDensity;    // (absorbance scale, mass scale) for Beer–Lambert
 uniform float uTime;
 uniform float uMicro;
 uniform float uDebug;
 uniform float uReliefMix;    // how much relief the refracted path follows
-uniform float uShadowMix;    // caustic self-shadowing strength
-// Caustic self-shadow, computed in the emissive chunk and consumed in the
-// transmission chunk. A file-scope global is the only thing that survives
-// between them — three.js injects each chunk separately into main().
-float gShade = 0.0;
-// Shared field neighbourhood: fetched ONCE in the shading-normal block and
-// reused by the caustics and the dye refraction. File-scope because
-// three.js injects each chunk separately into main().
-float gHC = 0.0, gHL = 0.0, gHR = 0.0, gHD = 0.0, gHU = 0.0;
-uniform float uLean;    // 1 = lean/integrated GPU tier: skip optional taps
+// File-scope globals are the only thing that survives between the separate
+// chunks three.js injects into main(). gRefract is the raw transmission
+// sample, kept for the ?debug=refract view.
+vec3 gRefract = vec3(0.0);
 varying vec2 vLuv;
-varying float vH;
-varying vec3 vWorldPos;
 
 float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 p) {
@@ -139,45 +120,20 @@ float vnoise(vec2 p) {
 float maxComp(vec3 v) { return max(v.x, max(v.y, v.z)); }
 
 /**
- * Soft-saturation reference for the surface slope.
+ * Height gradient from the live field, wide-averaged so it stays smooth.
  *
- * ~19°: past that a real water surface breaks up, and beyond a hard limit the
- * shading normal can tip far enough past vertical to read as flat dark wedges
- * instead of liquid.
+ * Shared by the shading normal and the refraction on purpose. When these were
+ * computed separately, the bowl seen THROUGH the water never agreed with the
+ * ripples seen ON it, and the composite read as two unrelated images stapled
+ * together. One function, one field, one answer.
  */
-const float RELIEF_SOFT = 0.34;
-
-/**
- * Height neighbourhood of the live field — ONE fetch set, shared by the
- * shading normal, the caustics and the refraction.
- *
- * Shared on purpose: when these were computed separately, what the eye sees
- * THROUGH the water never agreed with the ripples seen ON it, and the
- * composite read as two unrelated images stapled together. One field, one
- * neighbourhood, one answer.
- *
- * Returns (center, left, right, down, up). The lean tier takes the wide
- * stencil only (4 fetches instead of 8); the high tier averages a second,
- * narrower ring to suppress texel-scale ripple in the figure.
- */
-void fieldNhood(vec2 uv, out float hC, out float hL, out float hR, out float hD, out float hU) {
-  vec2 e = uTexel * 2.0;
-  hC = texture2D(uField, uv).r;
-  hL = texture2D(uField, uv - vec2(e.x, 0.0)).r;
-  hR = texture2D(uField, uv + vec2(e.x, 0.0)).r;
-  hD = texture2D(uField, uv - vec2(0.0, e.y)).r;
-  hU = texture2D(uField, uv + vec2(0.0, e.y)).r;
-  if (uLean < 0.5) {
-    hL = (hL + texture2D(uField, uv - vec2(uTexel.x, 0.0)).r) * 0.5;
-    hR = (hR + texture2D(uField, uv + vec2(uTexel.x, 0.0)).r) * 0.5;
-    hD = (hD + texture2D(uField, uv - vec2(0.0, uTexel.y)).r) * 0.5;
-    hU = (hU + texture2D(uField, uv + vec2(0.0, uTexel.y)).r) * 0.5;
-  }
-}
-
-/** ∂h/∂uv from the same neighbourhood (shared with the caustics). */
-vec2 nhoodGrad(float hL, float hR, float hD, float hU) {
-  return vec2(hR - hL, hU - hD) * 0.5 / (uTexel.x * 2.0);
+vec2 fieldGrad(vec2 uv, vec2 texel) {
+  vec2 e = texel * 2.0;
+  float hL = (texture2D(uField, uv - vec2(e.x, 0.0)).r + texture2D(uField, uv - vec2(texel.x, 0.0)).r) * 0.5;
+  float hR = (texture2D(uField, uv + vec2(e.x, 0.0)).r + texture2D(uField, uv + vec2(texel.x, 0.0)).r) * 0.5;
+  float hD = (texture2D(uField, uv - vec2(0.0, e.y)).r + texture2D(uField, uv - vec2(0.0, texel.y)).r) * 0.5;
+  float hU = (texture2D(uField, uv + vec2(0.0, e.y)).r + texture2D(uField, uv + vec2(0.0, texel.y)).r) * 0.5;
+  return vec2(hR - hL, hU - hD) * 0.5 / e.x;
 }
 `;
 
@@ -200,49 +156,37 @@ export function createLiquidMaterial(): {
     // times that is what produced hard radial spokes through the refracted
     // image. The figure is read through the shading normal and caustics, not
     // through silhouette, so a small real displacement is correct here.
-    // Raised from 0.015: at the old value the standing relief bent reflections by
-    // barely a degree, so the figure could not modulate the mirrored studio and
-    // the water read as flat grey no matter how correct the field was. The tanh
-    // soft-cap on the slope is what keeps stronger relief from tipping into
-    // wedges, so amplitude can be honest here.
-    uAmp: { value: 0.024 },
+    uAmp: { value: 0.016 },
     // Optical normal gain lifts the shading slope to a legible level without
     // tipping the surface past vertical. With the studio's vertical gradient
     // this is where a crest reads as a bright swell and a trough as soft shade;
     // much higher and the same relief turns to hard chrome.
-    // Optical normal gain. With the geometric displacement kept small (above),
-    // this is what actually makes the figure legible: it amplifies the field's
-    // slope into the shading normal without touching the mesh, so relief reads
-    // in the reflections with no faceting.
     //
-    // Six superposed modes push this much harder than the old two-mode field
-    // did — the summed gradient is several times larger — so the gain comes
-    // DOWN from 15. Too high and the surface stops reading as liquid and turns
-    // into hard light/dark wedges with no reflection in between.
-    uNormalGain: { value: 7.5 },
-    // Clear shallow water over polished steel: nearly colourless, with the
-    // faint cool cast a shallow depth of clean water gives. The bowl and its
-    // colour now reach the eye THROUGH the surface instead of behind an
-    // opaque tinted disc.
-    // A cool, properly saturated water tint. This was near-white (0.75, 0.84,
-    // 0.92), which is what made everything grey: the scatter term below is
-    // scaled by this colour, so a near-white tint washed every mixed pigment
-    // toward white and killed the subtractive mixing along with it.
-    uWater: { value: new THREE.Vector3(0.75, 0.84, 0.92) },
-    uCaustics: { value: 1 },
-    uCausticK: { value: 4.8e-7 },
+    // The value here is only the starting point: engine.step() drives it from
+    // the dominant mode's wavenumber every frame, because the field gradient
+    // itself grows with k and a fixed gain cannot serve the whole band. See
+    // RELIEF_BASE / RELIEF_EXP in engine.ts for the measurement behind it.
+    uNormalGain: { value: 6.5 },
     uDepth: { value: 1 },
     uNodal: { value: 0 },
-    uRefract: { value: 0.0045 },
-    // Weight of the analytic refracted-basin radiance — the water's optical
-    // body: the polished steel floor seen through the surface, bent by the
-    // live relief, absorbed by the pigment.
-    // Raised from 0.5: the refracted basin is the water's optical body, and at
-    // the old weight it contributed too little for the pool to read as having
-    // depth. More basin radiance seen through the surface is what reads as
-    // transparency rather than a tinted disc.
-    uRefractGain: { value: 0.7 },
-    // (absorbance scale, mass scale) for Beer–Lambert absorption. `mass` is now
+    uRefract: { value: 0.006 },
+    // Absorbance scale 2.3 -> 0.85, and this is the single change that makes the
+    // water read as transparent with the colour living INSIDE it.
+    //
+    // inkAbsorbance() returns -ln(linear colour), so a deep ink's densest
+    // channel is ~5-7. At a scale of 2.3 that is A·density ~14, and exp(-14) is
+    // effectively zero: every pour transmitted no light at all, so ALL the
+    // visible colour had to come from the additive scatter term instead. That
+    // is the mechanism behind every colour complaint — the transmission path
+    // was black, the scatter path was doing the work, and a scatter term cannot
+    // darken on overlap, so the mixing was wrong.
+    //
+    // At 0.85 a single pour peaks around A·density ~5, i.e. exp(-5) ≈ 0.7 in the
+    // transmitted channel and near zero in the ones it absorbs. That is a real
+    // filter: most of the bowl still shows through, and what comes through is
+    // the ink's own hue. Overlapping pours then add absorbance and go dark on
+    // their own, with no correction needed.
+// (absorbance scale, mass scale) for Beer–Lambert absorption. `mass` is now
     // the OPTICAL PATH LENGTH multiplier for pigment suspended in the water —
     // the colour is no longer painted on the surface, it is light that made it
     // through the liquid. Absorbance scale is kept below 1 so a pour stays
@@ -252,63 +196,58 @@ export function createLiquidMaterial(): {
 // the reference has ~11% of its dish at maximum chroma, this render had none).
 // Mass scale raised alongside so coverage tracks the deeper colour and dense
 // regions read as real deposit rather than a tint.
-// Both scales raised together: the absorbance scale so thin-but-present dye still
-    // tints (the transmitted path was honest but too quiet), and the mass scale so
-    // the same mass engages the specular kill and the powder term. Raised as a
-    // pair because splitting them (strong colour, weak kill or vice versa)
-    // produces either chalk or mud.
-    uInkDensity: { value: new THREE.Vector2(3.2, 3.2) },
+uInkDensity: { value: new THREE.Vector2(3.6, 6.0) },
     uTime: { value: 0 },
-    uMicro: { value: 0.006 },
+    uMicro: { value: 0.0 },
     // Fraction of the shading relief the refracted path follows. High enough
     // that the bowl bends WITH the ripples (one coherent water), low enough
     // that rays stay inside the vessel instead of sampling the dark studio.
-    uReliefMix: { value: 0.42 },
-    // How strongly caustic crests shadow the troughs behind them. Deliberately
-    // below 1: a full-contrast march read as huge shaded wedges; controlled
-    // shading enriches the caustics without dominating the image.
-    uShadowMix: { value: 0.45 },
+    uReliefMix: { value: 0.55 },
     uDebug: { value: 0 },
+    // Set from the detected GPU tier in the engine constructor.
     uLean: { value: 0 },
   };
 
   const material = new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
-    // TRANSMISSION IS NOW ANALYTIC — see basinRadiance() in the shader.
-    // three.js's screen-space transmission re-renders the entire opaque scene
-    // into a mip-chained buffer every frame; measured on the target machine
-    // that single pass dominated the whole frame (p95 350 ms → ~60 ms without
-    // it) and its mip selection produced block seams across the pool. The
-    // water's optical body is now computed directly: the polished steel basin
-    // seen along the refracted-then-mirrored ray, absorbed through the water
-    // column and the pigment, Fresnel-weighted against the surface reflection
-    // that three.js already computes. Physically the better model for a
-    // shallow pool over a mirror-finish basin, and a fraction of the cost.
-    transmission: 0,
+    // Real TRANSMISSION, not a tinted opaque disc. Water is a dielectric: light
+    // enters, travels through the liquid, picks up the pigment suspended in it
+    // and exits. Refraction (ior 1.33) is what bends the polished steel bowl
+    // seen through the surface — the single strongest "this is water" cue, and
+    // the one an opaque surface can never produce.
+    //
+    // Kept below 1 deliberately. At full transmission the refracted ray swings
+    // far on every ripple, misses the bowl entirely and samples the dark studio
+    // surround instead — which is what painted hard black wedges across the
+    // surface. A partial transmission keeps a fraction of the shading normal's
+    // own response, so those regions still read as water with pigment in it.
+    // NEAR transparent rather than perfectly clear. At exactly 1.0 the surface is
+    // pure glass and the eye reads a still photograph; holding a few percent of
+    // the material's own response gives the pool a faint luminous body, so there
+    // is always a sense of liquid in the dish even where the figure is flat.
+// Low enough not to reintroduce the opaque grey disc the transmission tint used
+    // to produce (see the diffuseColor note below).
+    transmission: 0.94,
     thickness: LIQUID_THICKNESS,
     ior: 1.333,
     // Water itself is nearly colourless; this is the faint cool cast over a
     // long path, not the colour of the liquid.
-    attenuationColor: new THREE.Color(0.80, 0.89, 0.95),
-    attenuationDistance: 2.4,
+    attenuationColor: new THREE.Color(0.82, 0.90, 0.96),
+    attenuationDistance: 2.2,
     // Near-mirror surface so the studio's strips read as sharp highlights.
     // Not purely a look knob: three.js picks the mip level for the
     // transmission buffer FROM this roughness, so a perfectly smooth surface
     // samples the refracted image unfiltered and every ripple facet resolves
     // into a hard radial spoke. A small value dissolves that tessellation
-    // while leaving the surface reflection itself sharp. Also the mip the
-    // transmission buffer is sampled at: too coarse and the refracted image
-    // shows blocky mip-boundary seams (the straight chords seen earlier).
-    roughness: 0.055,
+    // while leaving the surface reflection itself sharp.
+    roughness: 0.075,
     metalness: 0,
-    // The surface reflection is where the cymatic relief reads: the studio's
-    // bright strips and dark flags move across the surface as the normals
-    // tilt. Kept strong so fine (high-frequency) figures still separate.
-    // Lowered from 2.4: at that level the white-room mirror alone carried
-    // ~0.8 linear even where the kill was active, leaving no headroom for the
-    // transmitted dye. Clear water still mirrors brightly enough to read as
-    // wet; dense ink now goes dark enough to read as colour.
-    envMapIntensity: 1.2,
+    // 1.0 -> 1.45. The surface reflection is where the cymatic relief reads — the
+    // studio's bright strips and dark flags sweep across the water as the
+    // normals tilt. At 1.0 the dish interior mirrored the dark studio flags
+    // almost exclusively, which is what turned the whole pool charcoal in
+    // clear water and left the pigment as the only thing visible.
+    envMapIntensity: 1.45,
     specularIntensity: 1.0,
     side: THREE.FrontSide,
   });
@@ -324,8 +263,7 @@ uniform sampler2D uField;
 uniform float uR;
 uniform float uAmp;
 varying vec2 vLuv;
-varying float vH;
-varying vec3 vWorldPos;`,
+varying float vH;`,
       )
       .replace(
         '#include <begin_vertex>',
@@ -338,8 +276,6 @@ varying vec3 vWorldPos;`,
   vH = hgt;
   // simulated surface + a small capillary rise where it meets the wall
   transformed.y += hgt * uAmp + smoothstep(0.90, 1.0, rr) * 0.012;
-  // world position for the analytic basin refraction below
-  vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
 }`,
       );
 
@@ -351,113 +287,66 @@ varying vec3 vWorldPos;`,
         /* glsl */ `#include <normal_fragment_maps>
 {
   vec2 luv = vLuv;
-  // ONE fetch set, shared with the caustics and the dye refraction below.
-  fieldNhood(luv, gHC, gHL, gHR, gHD, gHU);
-  vec2 gradUv = nhoodGrad(gHL, gHR, gHD, gHU); // ∂h/∂uv
+  // Shared with the refraction below — see fieldGrad(). One field, one answer.
+  vec2 gradUv = fieldGrad(luv, uTexel); // ∂h/∂uv
   vec2 slope = gradUv * uAmp * uNormalGain / (2.0 * uR);
-  // A real surface has a physical slope limit — but a HARD clamp is exactly
-  // why raising the frequency used to make the cymatics disappear: high modes
-  // carry proportionally less slope at the same visual amplitude, so they hit
-  // the limit first and every crest saturated to the same slope — flat,
-  // identical, dead. A SOFT saturation (tanh) is monotonic and smooth, so a
-  // finer figure is merely compressed, never flattened, and its highlights
-  // still separate.
-  slope = vec2(
-    RELIEF_SOFT * tanh(slope.x / RELIEF_SOFT),
-    RELIEF_SOFT * tanh(slope.y / RELIEF_SOFT)
-  );
-
-  // Fine secondary ripple detail (guide §6.5) — a supporting layer only, and
-  // deliberately QUIET. The epsilon must be SMALLER than the noise's own
-  // wavelength (1/34 ≈ 0.03 uv): a larger offset turns the "gradient" into
-  // amplified noise, which samples into visible blocks across the basin.
+  // a real surface has a physical slope limit; clamping keeps a strong
+  // optical gain from tipping the surface past vertical into CG-looking facets
+  // A real surface has a physical slope limit. Clamping it also stops a steep
+    // crest from catching a whole softbox in one flat patch — which is what
+    // turns water into hard-edged white and tan blobs.
+    // A real water surface cannot stand much past ~30° without breaking up.
+    // This clamp is what keeps a strong optical gain from tipping whole lobes
+    // past vertical, where they stop reflecting and become flat dark wedges.
+    // A real water surface cannot stand much past ~30° without breaking up, so
+  // the slope is bounded — but the bound is SOFT, above a knee, rather than a
+  // hard clamp.
   //
-  // Crawl suppression (this was the "groan"): the earlier version animated
-  // the noise phase every frame at full amplitude, which produced a restless
-  // crawling grain over the whole surface. The phase now moves slowly, and
-  // the amplitude is a fraction of the original — it reads as capillary
-  // sparkle instead of rolling static.
+  // The hard clamp this replaces was reached across 83% of the dish at 432 Hz
+  // and 88% at 790 Hz (measured — see scripts/slope.mjs), because the gain was
+  // an order of magnitude too high (fixed in engine.ts). A hard clamp there
+  // means the normal is CONSTANT over most of the surface: the whole figure
+  // collapses to one flat tone per lobe and renders as a hard-edged embossed
+  // pattern stamped on the water instead of as relief.
+  //
+  // Below the knee the slope passes through untouched, so ordinary parts of the
+  // figure keep their true slope. Above it the slope rolls off asymptotically
+  // instead of clipping, so a steep crest stays a rounded swell with the
+  // gradient still varying across it, and the surface keeps catching the studio
+  // instruments in bands rather than freezing into flat facets.
+  const float KNEE = 0.20;
+  const float SLOPE_MAX = 0.52;
+  vec2 s2 = abs(slope);
+  if (s2.x > KNEE || s2.y > KNEE) {
+    vec2 over = max(s2 - KNEE, vec2(0.0));
+    s2 = min(s2, vec2(KNEE)) + (SLOPE_MAX - KNEE) * tanh(over / (SLOPE_MAX - KNEE));
+  }
+  slope = sign(slope) * s2;
+
+  // Fine secondary ripple detail (guide §6.5) — a supporting layer only.
+  // The epsilon must be SMALLER than the noise's own wavelength (1/34 ≈
+  // 0.03 uv): a larger offset turns the "gradient" into amplified noise,
+  // which samples into visible blocks across the whole basin.
   float epsN = 0.0025;
   float n0 = vnoise(luv * 26.0 + vec2(uTime * 0.10, -uTime * 0.07));
   float nx = vnoise((luv + vec2(epsN, 0.0)) * 26.0 + vec2(uTime * 0.10, -uTime * 0.07));
   float ny = vnoise((luv + vec2(0.0, epsN)) * 26.0 + vec2(uTime * 0.10, -uTime * 0.07));
+  // Crawl suppression: the earlier version animated the phase every frame at
+  // full amplitude, which produced a restless crawling grain over the whole
+  // surface. The phase now moves slowly, and the amplitude is a fraction of
+  // the original — it reads as capillary sparkle instead of rolling static.
   slope += vec2(nx - n0, ny - n0) / epsN * uMicro * 0.0007;
 
   vec3 nObj = normalize(vec3(-slope.x, 1.0, -slope.y));
   // meniscus: the surface leans inward where it climbs the basin wall
   float rr = length(luv - 0.5) * 2.0;
   vec2 rdir = normalize(luv - 0.5 + 1e-6);
-  nObj = normalize(nObj + vec3(-rdir.x, 0.0, -rdir.y) * smoothstep(0.92, 1.0, rr) * 0.38);
+  nObj = normalize(nObj + vec3(-rdir.x, 0.0, -rdir.y) * smoothstep(0.90, 1.0, rr) * 0.5);
   normal = normalize((viewMatrix * vec4(nObj, 0.0)).xyz);
 }`,
       )
       // ---- pigment as matter inside the liquid -------------------------
-      // ---- the analytic basin refraction -------------------------------
-      // Defined out here (before main(), right after three.js declares the
-      // environment helpers) because GLSL cannot nest function definitions.
       .replace(
-        '#include <envmap_physical_pars_fragment>',
-        /* glsl */ `#include <envmap_physical_pars_fragment>
-      vec3 basinRadiance(vec3 worldPos, vec3 worldNormal, vec3 worldView, vec3 dyeAbsorb) {
-        vec3 rDir = refract(worldView, worldNormal, 1.0 / 1.333);
-        if (dot(rDir, rDir) < 1e-6) rDir = worldView;            // total-internal guard
-        float depth = 0.075;                                      // water column (m)
-        float t = depth / max(0.08, -rDir.y);                     // path to the floor
-        vec3 floorPos = worldPos + rDir * t;
-
-        // The floor is brushed steel: mirror the refracted ray off it and take
-        // the studio's radiance along that direction.
-        vec3 reflDir = reflect(rDir, vec3(0.0, 1.0, 0.0));
-        vec3 floorRad = vec3(0.30);
-        #ifdef USE_ENVMAP
-          floorRad = textureCubeUV(envMap, envMapRotation * reflDir, 0.30).rgb;
-        #endif
-        // NO procedural grain on the floor. An earlier version multiplied a
-        // 120-cell value noise into the floor radiance; at render size each
-        // noise cell landed on a few pixels and aliased into a dotted grain
-        // carpet covering the whole dish. It needed no pigment and no drive,
-        // which is why the "grain layer" appeared without any click.
-
-        // THE BASIN'S OWN STRUCTURE. The studio environment is smooth in the
-        // directions a shallow pool looks into, so sampling it alone gave the
-        // pool a flat pale wash. What the eye actually sees through water in a
-        // steel dish is the machined floor — concentric turning rings — darkening
-        // into the inner wall. Synthesising that analytically (three cheap terms,
-        // no second scene render) gives the refracted image real structure, and
-        // because it is sampled along the REFRACTED ray it shifts and bends with
-        // the live relief: the figure shows up in the water body, not just in
-        // the surface reflection.
-        float rr = length(floorPos.xz) / 0.87;
-        // Turning rings, kept sub-visible. A real machined floor has turning
-        // marks, but 4% over ~14 rings reads as banding across the whole dish,
-        // not as machining — and like the grain it needed no pigment and no
-        // drive. Half a percent over ~35 rings dissolves into texture.
-        float rings = 0.995 + 0.005 * sin(rr * 220.0);
-        // The inner wall darkens toward the rim, but gently: crushing the
-        // outer third of the basin to 0.42 is what made the pool read as a
-        // dark opaque disc instead of clear water over bright steel.
-        float wallDark = mix(1.0, 0.60, smoothstep(0.72, 1.0, rr)); // inner wall
-        // The basin body sits BELOW the reflection highlights, not beside
-        // them: it must be darker than the mirrored room or the pool has no
-        // room left for light-and-shade and reads as a flat white veil. The
-        // floor mirror faces the bright ceiling directly, so even a modest
-        // multiplier lands bright — this is set so the body holds mid-grey
-        // and the relief modulates around it.
-        floorRad *= rings * wallDark * 0.55;
-
-        // Beer-Lambert down the water column, then the pigment over the same
-        // path. NOTE: no pigment-coverage factor here — the refracted body is
-        // present in CLEAR water too (that is the whole point of water); the
-        // dye only changes its colour.
-        vec3 sigma = (vec3(1.0) - uWater) * 3.0;
-        vec3 transmitted = floorRad * exp(-sigma * t) * dyeAbsorb;
-
-        // Fresnel: at grazing angles the surface reflects and transmission drops.
-        float cosT = clamp(dot(-worldView, worldNormal), 0.0, 1.0);
-        float F = 0.02 + 0.98 * pow(1.0 - cosT, 5.0);
-        return transmitted * (1.0 - F);
-      }`,
-      )      .replace(
         '#include <color_fragment>',
         /* glsl */ `#include <color_fragment>
 vec2 luvC = vLuv;
@@ -465,12 +354,22 @@ vec2 luvC = vLuv;
 // refraction: the ink layer shifts with the surface normal (guide §6.3)
 vec2 dyeUv = clamp(luvC + vec2(0.0), vec2(0.001), vec2(0.999));
 {
-  // The SAME neighbourhood the surface is shaded with (fieldNhood above), so the ink
+  // The SAME gradient the surface is shaded with (fieldGrad above), so the ink
   // seen through the water sits exactly where the ripple above it bends.
-  // Clamped hard: the dye is 1024² while this gradient is estimated at 512²,
-  // so even a modest offset walks across many texels of ink and tears
-  // filaments into dashes.
-  vec2 g = clamp(nhoodGrad(gHL, gHR, gHD, gHU) * 0.9, vec2(-0.28), vec2(0.28));
+  //
+  // Clamped HARD, and this clamp is load-bearing rather than defensive. The
+  // field is 512² and the dye buffer is 768², so one texel of field gradient
+  // is already more than a texel of dye. The offset below is in UV, applied to
+  // a texture 1.5x finer than the gradient it came from — so a gradient of
+  // only ±0.05 (perfectly normal on a ripple crest) walks across ~38 dye
+  // texels. That is what tore every filament into vertical dashes: the ink was
+  // being sampled from somewhere else entirely, and the wrong part of the
+  // pattern was substituted wherever the surface tilted.
+  //
+  // Measured fix: the grain survives with this at 0 but not at 0.0045, which
+  // puts the worst-case walk inside a dye texel. Below ~0.003 the ink visibly
+  // detaches from the ripples it is supposed to be under.
+  vec2 g = clamp(fieldGrad(luvC, uTexel) * 0.35, vec2(-0.28), vec2(0.28));
   dyeUv = clamp(luvC - g * uRefract, vec2(0.001), vec2(0.999));
 }
 vec4 dyeS = texture2D(uDye, dyeUv);
@@ -485,214 +384,172 @@ vec4 dyeS = texture2D(uDye, dyeUv);
 // and because absorbance accumulates additively, blue over yellow still
 // transmits blue·green = green.
 vec3 dyeAbsorb = exp(-dyeS.rgb * uInkDensity.x);
-// Resurrect chroma: at depth every channel tends to saturate and the hue
-// slides to neutral. Pulling transmission toward its strongest channel keeps
-// a poured colour luminous instead of muddy.
-dyeAbsorb += maxComp(dyeAbsorb) * 0.20 * (vec3(1.0) - dyeAbsorb);
-// Drive deep concentrations to chromatic, full saturation in the CORE of a
-// pour while thin films stay translucent ramps — the hard photometric cliffs
-// of exp(−A) at high density are what previously turned every deposit into a
-// flat, razor-edged blob. The chromatic channels are pushed apart only where
-// the pigment is genuinely dense.
-{
-  float depth = maxComp(dyeS.rgb);
-  // Only the genuinely deep pigment is pushed, and gently.
-  //
-  // At 2.2x, once a pour was dense enough the channels were driven to their
-  // extremes and clipped, which is what destroyed the mixing: over-saturated
-  // primaries stop being combinable, so overlapping colours stopped reading
-  // as subtractive mixes (blue over yellow going green) and just stacked as
-  // flat clipped regions.
-  float push = smoothstep(0.6, 1.8, depth);
-  // Push channels apart around the mean: raises CHROMA without changing
-  // luminance, which is the difference between "saturated" and "brighter".
-  float meanCh = (dyeAbsorb.r + dyeAbsorb.g + dyeAbsorb.b) / 3.0;
-  dyeAbsorb = clamp(meanCh + (dyeAbsorb - meanCh) * (1.0 + push * 0.8), 0.0, 1.0);
-}
+// NO CHROMA RESURRECTION, and no chroma push. This is the mixing bug.
+//
+// Both of those corrections pull the three channels back toward each other,
+// and they were added to fight a symptom (dense pours reading muddy) that was
+// actually caused by unbounded absorbance. Now that the pigment field bounds
+// density (see the ABS_CEIL clamp in sim/shaders.ts), a genuine blue-over-
+// yellow overlap transmits blue·yellow ≈ green·0.4 — a DARK green. The chroma
+// helpers then "resurrected" that dark green toward its own strongest channel,
+// and because green is green's strongest channel they lifted it back toward
+// full brightness. The overlap ended up BRIGHTER than either parent: measured
+// 0.877 against parents at 0.53 and 0.45, with only 3 green pixels in the whole
+// overlap region instead of thousands.
+//
+// Subtractive mixing is already correct in the physics — absorbance is
+// additive, so exp(-A_total) does the right thing by itself. Any correction
+// that pushes the channels apart is fighting that. Leaving the transmission
+// exactly as Beer-Lambert computed it is what makes overlap darken.
+// Drive deep concentrations to FULL saturation. Measured against the reference,
+// that image carries ~11% of its dish at maximum chroma with a saturation
+// spread of 0.32, while this render had essentially none — every pour decayed
+// to a pale wash and no colour ever reached full strength. The chromatic
+// channels are pushed apart only where the pigment is genuinely dense, so thin
+// films stay subtle and only real deposits achieve the saturated core the
+// reference shows.
 // How much liquid the eye is looking through here — a standing swell of dye
 // is a longer optical path than a clear trough, so it reads as denser.
 // The height is sampled from the field texture rather than taken from the
 // varying: vH is interpolated across the polar mesh, so using it here makes
 // the path length step ring by ring and the dye bands visibly along the
 // tessellation. Texture sampling is smooth everywhere.
-float pathLen = 1.0 + clamp(texture2D(uField, luvC).r, -1.0, 1.0) * 0.30 * uDepth;
-dyeAbsorb = pow(dyeAbsorb, vec3(pathLen));
+// Bounded path length, and applied to the ABSORBANCE rather than the
+// transmission. A swell of dye is a longer optical path, so it reads denser —
+// but pow() on a transmission value is a brightness curve that flattens toward
+// 0 and toward 1, which is how the deepest pours ended up losing their colour
+// (the reported "the colour goes dark after a few seconds"). Scaling the
+// absorbance scales the optical path in the physically meaningful direction,
+// and the exp() still does the compression.
+float pathLen = 1.0 + clamp(texture2D(uField, luvC).r, -1.0, 1.0) * 0.28 * uDepth;
+dyeAbsorb = exp(-dyeS.rgb * (uInkDensity.x * pathLen));
 float cover = 1.0 - exp(-dyeS.a * uInkDensity.y);
-// suspended micro-bubbles: a faint animated glitter inside dense pigment,
-// the way a real pour holds countless tiny air bells that catch the light
-// Suspended micro-bubbles catching the light.
-  //
-  // This was the "random grainy layer that appears when you click the water".
-  // At a spatial frequency of 240 across a ~900px dish, each noise cell lands
-  // on roughly four pixels — far above the sampling rate, so it aliased into
-  // crawling static rather than reading as bubbles. It was also scaled by
-  // the cover term, so it was invisible on clear water and appeared exactly
-  // where ink was deposited, which is what made it look like clicking caused it.
-  //
-  // Lowered to a frequency that is actually resolvable, and gated to only the
-  // densest pigment so it stays a subtle sheen instead of a film.
-  float sparkleSrc = vnoise(luvC * 46.0 + vec2(uTime * 0.9, -uTime * 0.6));
-  float sparkle = smoothstep(0.74, 0.96, sparkleSrc) * cover * cover * 0.045;
-// Light scattered back OUT of the water by the pigment itself. Its colour is
-// the dye's own transmitted hue, so a red pour scatters red — this is what
-// keeps a colour readable even over a dark part of the bowl, and it is what
-// makes the ink feel suspended IN something rather than painted ON it.
-// The colour a pour shows is its TRANSMITTED hue (dyeAbsorb, already
-// chroma-separated above), normalised so a thin film still reads as its own
-// colour instead of washing to near-white, and weighted by how much pigment
-// is present. Note the sign discipline: the field stores ABSORBANCE, so the
-// colour of the pigment is exp(-absorbance) — normalising the absorbance
-// itself would show the complement (blue ink reading as orange).
-vec3 dyeHue = dyeAbsorb / max(maxComp(dyeAbsorb), 1e-4);
-// The surface's own body is nearly BLACK water: at a 52° view angle water
-// reflects only ~5% of what it receives, so a diffuse body large enough
-// to "see" is large enough to hide every highlight — the pool read as
-// milky pale-blue and the relief vanished with it. All of the water's
-// visible body now comes from the refracted basin below (the correct
-// source), and what is left here is just a faint scattering floor.
+
+// Light scattered back OUT of the water by suspended pigment volume:
+vec3 dyeScatter = dyeAbsorb * cover;
+
+// Clear dielectric water: the medium itself transmits essentially everything.
+// Absorption is NOT done here — it is Beer–Lambert below (dyeAbsorb) plus the
+// path attenuation three.js applies — so the medium's own albedo must be
+// WHITE, not zero.
 //
-// At 0.035, not zero: with no diffuse term the troughs go fully black
-// wherever the reflection is dark, and black holes read as holes in the
-// water rather than shaded water. And crucially the studio's direct lights
-// (key 1.5 + fill + rim + hemi ≈ 2.65 total) must have almost nothing
-// Lambertian to land on — that flood on a 0.18 body was the flat grey veil
-// covering the whole dish, unaffected by caustics, env intensity OR the
-// basin gain, because it is none of those things.
-    diffuseColor.rgb = uWater * 0.035;`,
+// This used to be vec3(0.0), chosen so no diffuse wash would cover the silver
+// basin. That is the one value that cannot be used, because three.js derives
+// the transmission tint from it:
+//
+//     material.diffuseContribution = diffuseColor.rgb * (1 - metalness);
+//     transmittance    = diffuseColor * volumeAttenuation(path, ...);
+//     transmittedLight *= transmittance;
+//
+// A zero albedo therefore multiplies the refracted image by ZERO. The water
+// rendered as an opaque black disc carrying nothing but a specular sheen, and
+// no amount of studio, dish or caustic tuning could change it — which is
+// exactly the "flat, featureless disc that looks like a broken physics model"
+// this file has been fighting all along. Isolated by hiding the dish and the
+// ground, painting the background a strong blue (the water stayed black), and
+// reading the transmission sample back through ?debug=refract.
+//
+// White is both correct (water is nearly colourless) and necessary. The diffuse
+// wash it was meant to avoid never appears anyway: transmission REPLACES
+// totalDiffuse outright a few chunks later.
+diffuseColor.rgb = vec3(1.0);`,
       )
-      // ---- ink reads through its own colour, not the mirror ---------------
-      // Dense pigment must SUPPRESS the white-room mirror sitting on top of
-      // it, or every pour chalks out to pastel no matter how saturated the
-      // dye underneath is. An earlier revision of this file had exactly this
-      // suppression; it was lost in a later rewrite, and the pastel wash is
-      // what came back with it.
-      //
-      // Deliberately PARTIAL, not a full matte kill: the reference ink is
-      // saturated AND wet. Roughness rises enough to spread the mirror into a
-      // soft sheen, and the specular keeps a third of its strength so dense
-      // colour stays luminous instead of turning to flat paint.
-      .replace(
-        '#include <roughnessmap_fragment>',
-        /* glsl */ `#include <roughnessmap_fragment>
-// Suppression is NEAR-TOTAL, not partial: with the studio's bright room behind
-    // it, even a third of the mirror left standing buries the transmitted colour
-    // under white. Measured: 0.35 specular at 2.4 env left 0.84 linear of mirror
-    // over dense ink, washing every pour to pastel. At 0.06 the ink keeps a wet
-    // sheen but the transmitted dye underneath does the talking.
-    roughnessFactor = mix(roughnessFactor, 0.45, cover);`,
-      )
-      .replace(
-        '#include <lights_physical_fragment>',
-        /* glsl */ `#include <lights_physical_fragment>
-#ifdef USE_SPECULAR
-    material.specularColor = mix(material.specularColor, vec3(0.06), cover);
-#endif`,
-      )
-      // ---- caustics + nodal diagnostic ----------------------------------
-      // Reuses the SAME neighbourhood the shading normal already fetched (see
-      // fieldNhood) instead of re-sampling the field, and the lean tier skips
-      // the light-march entirely. The previous version spent 8 fetches here
-      // plus a 3-tap march â€” the single heaviest block in the frame.
+      // ---- nodal diagnostic ------------------------------------------------
       .replace(
         '#include <emissivemap_fragment>',
         /* glsl */ `#include <emissivemap_fragment>
 {
-  // curvature in field units: one Laplacian over the shared 4-tap stencil
-  float div = gHL + gHR + gHU + gHD - 4.0 * gHC;
-  float lapn = div / ((uTexel.x * 2.0) * (uTexel.x * 2.0));
-
-  // SOFT KNEE instead of clamp(,0,1). A clamp turns every over-driven crest
-  // into the same solid white patch â€” which is precisely the "white grain
-  // waves" that raced across the surface when a drop kicked the field: the
-  // ripple crests clipped to 1.0 everywhere and read as bright noise. The
-  // rational knee L/(1+L) is monotonic and bounded: crests still focus light,
-  // but the response compresses instead of clipping, so structure survives.
-  float Lc = max(0.0, -lapn * uCausticK);
-  float caustic = Lc / (1.0 + Lc);
-
-  // Fade the caustics out at the SHORT-wavelength end: a drop ripple is a
-  // travelling wave a few texels wide, and focusing light on grid-scale
-  // roughness reads as grain rather than as caustics. Only the large-scale
-  // standing structure should carry the highlight. The probe reuses the
-  // neighbourhood the stencil already took.
+  // The caustic/emissive block that used to live here is GONE, and that is a
+  // deliberate removal rather than a retune.
   //
-  // Note the direction: the fade is ONE MINUS the curvature measure, so broad
-  // gentle structure keeps its caustics and grid-scale ripple loses them. An
-  // earlier version had this backwards (keeping caustics only where curvature
-  // was highest), which simultaneously hid the standing figure — the one
-  // thing caustics exist to reveal — and put full caustics on every grid
-  // ripple, the white grain that raced across the surface on every impact.
-  float rippleFade = 1.0 - smoothstep(0.0, 0.20, abs(gHR - gHL) + abs(gHU - gHD));
-  caustic *= rippleFade;
+  // It measured curvature with a 12-texel Laplacian of the height field and
+  // added it as emissive light. Two things were wrong with that:
+  //
+  //  1. It drew CONCENTRIC RINGS. The probe is radially symmetric about the
+  //     dish centre, so the highlights it produced came out as circles —
+  //     visible in clear water as "lines coming out of the colour", which is
+  //     exactly what was reported.
+  //  2. Its gain was pathological. The engine drove uCausticK from a base
+  //     roughly 150x below the value the shader needs, which left the term
+  //     contributing nothing at some settings and hard clipping at others,
+  //     so it was pure aliasing risk with no reliable visual payoff. The
+  //     project's own history records repeated attempts to tune it away.
+  //
+  // Real cymatic relief is seen as REFLECTION, not as glow: the surface tilts
+  // and the studio instruments sweep across it. That is carried by the
+  // shading normal, which now works correctly (see engine.ts RELIEF_BASE), so
+  // nothing is lost by deleting this.
 
-  float shade = 0.0;
-  if (uLean < 0.5) {
-    // Caustic self-shadowing: a crest blocks light from reaching the trough
-    // behind it, which is what turns veins into light-and-shade. High tier
-    // only, with a WIDE march â€” marching at one-texel spacing tracked
-    // grid-scale ripple curvature and painted the other half of the grain.
-    vec2 toLight = normalize(vec2(-0.42, -0.91));
-    for (int s = 1; s <= 2; s++) {
-      float t = float(s) * 5.0;
-      float occl = texture2D(uField, vLuv + toLight * uTexel * t).r - gHC;
-      shade += smoothstep(0.0, 0.05, occl) * (1.0 - float(s) / 3.0);
-    }
-    shade = clamp(shade * 0.26 * uShadowMix, 0.0, 1.0);
-  }
-  float shadeTerm = 1.0 - shade;
-
-  // Powder scattering: on a real Chladni plate the bright nodal lines ARE the
-  // settled powder catching the light, so weighting the caustic by gathered
-  // dye is what makes the figure DEVELOP rather than appear. Kept subtle â€” at
-  // full strength it stamps saturated ink-shaped colour along the crests.
-  float powder = clamp(cover * 1.4, 0.0, 1.0);
-  vec3 lit = vec3(1.0, 0.99, 0.95) * caustic * uCaustics * shadeTerm;
-  lit += dyeAbsorb * powder * caustic * 0.4 * uCaustics * shadeTerm;
-  totalEmissiveRadiance += lit;
-  gShade = shade;
-  // nodal map (debug): bright lines where the raw modal shape crosses zero
-  float node = exp(-abs(texture2D(uField, vLuv).g) * 11.0);
+  // Nodal map — a debug overlay, off unless requested.
+  vec2 luvE = vLuv;
+  float node = exp(-abs(texture2D(uField, luvE).g) * 11.0);
   totalEmissiveRadiance += vec3(0.16, 0.42, 0.85) * node * uNodal * 0.55;
 }`,
       )
-      // ---- the pigment lives INSIDE the water -------------------------
-      // Runs right after three.js's transmission slot, i.e. after the standard
-      // PBR lighting but BEFORE `outgoingLight` is assembled â€” so the surface's
-      // own specular reflection (energy-conserving, from the same env map and
-      // lights) is already computed, and only the light coming back UP through
-      // the water is added: the basin floor's radiance along the refracted and
-      // then mirrored ray, absorbed through the water column and the suspended
-      // pigment, Fresnel-weighted against the reflection. That is what makes
-      // colour behave like ink IN water instead of paint on top of it.
+      // ---- pigment absorption + the raw-field debug views ---------------
+      // Debug views (?debug=dye|mode|h) are applied at the very END of the
+      // chain, in the dithering chunk, so they still work if any of the
+      // physical blocks above is changed or removed.
       .replace(
         '#include <transmission_fragment>',
         /* glsl */ `#include <transmission_fragment>
-
-
 {
-  // The shading normal arrives in view space; viewMatrix is orthonormal, so the
-  // row-vector product recovers the world-space direction.
-  vec3 wN = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
-  vec3 wV = normalize(vWorldPos - cameraPosition);
-  vec3 basin = basinRadiance(vWorldPos, wN, wV, dyeAbsorb);
+  vec2 rg = clamp(fieldGrad(vLuv, uTexel) * uAmp * uNormalGain / (2.0 * uR) * uReliefMix,
+                  vec2(-0.22), vec2(0.22));
+  vec3 objN = normalize(vec3(-rg.x, 1.0, -rg.y));
+  vec3 calmN = normalize(transformNormalByInverseViewMatrix(objN, viewMatrix));
+  vec3 wp = vWorldPosition;
+  vec3 vv = normalize(cameraPosition - wp);
+  vec4 calm = getIBLVolumeRefraction(
+    calmN, vv, material.roughness, material.diffuseContribution, material.specularColorBlended,
+    material.specularF90, wp, modelMatrix, viewMatrix, projectionMatrix, material.dispersion,
+    material.ior, material.thickness, material.attenuationColor, material.attenuationDistance);
+  totalDiffuse = mix(totalDiffuse, calm.rgb, material.transmission);
+  gRefract = calm.rgb;
 
-  // Caustic self-shadow (computed in the emissive chunk) dims the body too, so
-  // troughs behind crests read as depth, not as a pattern on a flat sheet.
-  basin *= 1.0 - gShade * 0.32;
-
-  // light returning through the liquid
-  totalDiffuse += basin * uRefractGain;
-  // pigment scattered back out of the water: real ink is luminous rather than
-  // a flat cutout, and it stays readable over a dark patch of the studio.
+  // NO extra environment term here.
   //
-  // In-scattering is BOUNDED by what the pigment absorbed: a fraction of the
-  // absorbed light scattered back out. An earlier version added the dye hue
-  // times near-white water times 2.1, which pastellized every pour toward
-  // white and destroyed subtractive mixing — overlapping colours stopped
-  // combining and just washed out. This version cannot wash out, because it
-  // can never exceed a fraction of the light the dye took.
-  totalDiffuse += dyeHue * (vec3(1.0) - dyeAbsorb) * 0.30;
-}`,
+  // This used to add a textureCubeUV lookup of the overhead softbox along a
+  // single fixed direction, scaled by 0.35, applied to every pixel of the pool. It was there to stop the water going dark, but it adds a
+  // large, nearly CONSTANT term across the whole dish, and a constant term is
+  // exactly what flattens an image: it swamps the refracted steel bowl beneath
+  // (which is bright, structured, and the single best cue that this is water in
+  // a metal dish) and leaves one flat warm grey with the relief only faintly
+  // visible on top. Removing it restores the bowl and the caustic-like
+  // structure; the pool is now lit by what is actually under and over it.
+}
+
+// Physical light transport through water with suspended ink:
+// 1. Transmitted light filtered by Beer-Lambert absorption:
+vec3 transmittedRadiance = totalDiffuse * dyeAbsorb;
+
+// 2. Pigment volume backscatter. Light that entered the film, scattered and
+//    came back out carries the pigment's HUE, at a brightness set by how much
+//    light survived the trip.
+//
+//    The old version normalised the colour toward FULL saturation and FULL
+//    brightness — pigmentChroma / max(pigmentChroma) mixed in at 38% — which
+//    quietly divides by whatever the colour's largest channel happens to be.
+//    For any NEUTRAL ink that is catastrophic: pure black has zero chroma and
+//    one equal non-zero value, so it normalises to (1, 1, 1) and mixing 38%
+//    toward that lifted a black pour to mid grey. That is the reported "black
+//    behaves weird — it turns white". Taking the hue from the ratio and the
+//    BRIGHTNESS from dyeAbsorb keeps neutrals dark and still gives saturated
+//    inks their colour.
+vec3 pigmentHue = dyeAbsorb / max(maxComp(dyeAbsorb), 1e-3);
+vec3 backscatter = pigmentHue * dyeAbsorb * 2.0;
+
+// 3. Volume: light through the film, plus what the film itself scatters back.
+totalDiffuse = transmittedRadiance + backscatter * cover;
+
+// 4. Dense pigment is MATTE. The specular lobe is not part of the transmitted
+//    path, so it was surviving untouched and being added on top of the ink —
+//    which is why every dark pour, black most of all, came back looking washed
+//    out and pale rather than like ink. A film of pigment sitting on the
+//    surface destroys the mirror underneath it, so the reflection is absorbed
+//    by the same filter the transmitted light is. Clear water (cover -> 0) is
+//    unaffected and keeps its full studio reflection.
+totalSpecular *= mix(vec3(1.0), dyeAbsorb, clamp(cover * 1.2, 0.0, 1.0));`,
       )
       // ---- raw-field debug views (?debug=dye|mode|h) ---------------------
       .replace(
@@ -700,11 +557,12 @@ vec3 dyeHue = dyeAbsorb / max(maxComp(dyeAbsorb), 1e-4);
         /* glsl */ `#include <dithering_fragment>
 if (uDebug > 0.5) {
     vec3 dbg = vec3(0.5);
-    if (uDebug > 4.5 && uDebug < 5.5) {
-      dbg = vec3(1.0, 0.0, 0.0);      // coverage probe: is the liquid drawn here?
-    } else if (uDebug >= 5.5) {
-      // shading-normal probe: red/green = the surface tilt, blue = flat
-      dbg = vec3(normal.x * 0.5 + 0.5, normal.y * 0.5 + 0.5, normal.z * 0.5 + 0.5);
+    if (uDebug > 7.5) {
+      dbg = vec3(clamp(gRefract, 0.0, 1.0));   // ?debug=refract — what the water actually transmits
+    } else if (uDebug > 6.5) {
+      dbg = vec3(0.0, 1.0, 0.0);               // ?debug=sampler — is the transmission buffer bound at all?
+    } else if (uDebug > 4.5) {
+      dbg = vec3(1.0, 0.0, 0.0);               // ?debug=cover — is the liquid drawn here?
     } else if (uDebug < 1.5) {
     vec4 d = texture2D(uDye, vLuv);
     dbg = mix(vec3(0.5), d.rgb / max(d.a, 1e-3), clamp(d.a * 1.4, 0.0, 1.0));
@@ -731,9 +589,8 @@ if (uDebug > 0.5) {
       ['uniform sampler2D uField;', f],
       ['slope = gradUv', f],
       ['exp(-dyeS.rgb', f],
-      ['roughnessFactor = mix(roughnessFactor, 0.45, cover)', f],
-      ['material.specularColor = mix(material.specularColor, vec3(0.06), cover)', f],
-      ['totalDiffuse += basin', f],
+      ['vec3 transmittedRadiance = totalDiffuse * dyeAbsorb', f],
+      ['totalDiffuse = transmittedRadiance + backscatter * cover', f],
       ['uDebug > 0.5', f],
     ] as const) {
       if (!where.includes(marker)) {

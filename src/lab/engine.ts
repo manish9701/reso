@@ -23,7 +23,7 @@ import { createLiquidGeometry, createLiquidMaterial, LIQUID_R, LIQUID_Y, type Li
 import { ResonanceModel } from '../sim/resonance';
 import { WaveSimulation, SIM_SIZE } from '../sim/wave';
 import { FigureField, FIGURE_GAIN } from '../sim/figure';
-import { PigmentSimulation, DYE_SIZE } from '../sim/pigment';
+import { PigmentSimulation } from '../sim/pigment';
 import { DropletSystem } from '../sim/droplets';
 import { FullscreenPass, makeTarget } from '../sim/pass';
 import { COMBINE_FS } from '../sim/shaders';
@@ -33,6 +33,7 @@ const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 export interface LabOptions {
   reflections: boolean;
+  /** (a former caustic toggle; the caustic/emissive term was removed — see liquid.ts) */
   caustics: boolean;
   depth: boolean;
   nodalMap: boolean;
@@ -53,20 +54,48 @@ export interface SimParams {
 
 /** Pointer strike → direct velocity kick (h_ring ≈ Δv/ω ≈ 0.3). */
 const IMPULSE_GAIN = 5;
-/** Optical relief gain at the reference mode scale (k·R = 10), and the base
- *  caustic constant the frequency compensation scales from. */
-/** Optical relief gain at the reference mode scale (k·R = 10).
+/**
+ * Optical relief gain at the reference mode scale, and the exponent that
+ * compensates it across the band.
  *
- *  This is an OPTICAL gain, not geometry: the surface displacement stays
- *  millimetric, and the shading normal (which drives both the reflection and
- *  the refracted basin) is what carries the relief. Measured field gradients
- *  are ~0.005/texel on average with crests 60x steeper, so at the old gain
- *  the average slope was under 6° and the figure was invisible under a
- *  52° view — the gain has to be large enough that ORDINARY parts of the
- *  figure tilt the surface, with the shader's tanh soft-saturation keeping
- *  the steep crests from tipping past vertical. */
-const RELIEF_BASE = 22;
-const CAUSTIC_BASE = 4.8e-7;
+ * This is an OPTICAL gain, not geometry: the surface displacement stays
+ * millimetric and the shading normal (which drives both the reflection and
+ * the refracted basin) is what carries the relief.
+ *
+ * The exponent is NEGATIVE, and that is the whole point of the measurement.
+ * The old law was `RELIEF_BASE · (kR/10)^0.42` — i.e. it RAISED the gain with
+ * the mode's wavenumber. But the field gradient already grows with kR: a
+ * higher mode packs the same amplitude into a shorter wavelength, so its
+ * ∂h/∂u is larger before the gain is applied at all. Multiplying the two
+ * compounds, and the result was a uniform ~10x overdrive.
+ *
+ * Measured with scripts/slope.mjs over twelve stops of the band:
+ *
+ *     kR        grad ∂h/∂u        gain needed      gain this used to apply
+ *     p50   p90  (p90)            (p90 slope 0.20) (old law)
+ *     1.8    0.84  1.11               19.6             19.8
+ *     5.3    1.33  2.77                7.9             16.8
+ *     9.3    1.36  3.16                6.9             21.4
+ *    18.7    2.28  6.41                3.4             28.5
+ *    33.9    2.20  6.31                3.5             36.4
+ *    55.6    2.42  6.66                3.3             44.9
+ *
+ * So the required gain FALLS by roughly 6x across the band, while the old law
+ * rose by 2.3x. `6.5 · (kR/10)^-0.52` fits the measured requirement to within
+ * about 25% everywhere except the two lowest modes, where it sits low and the
+ * figure reads as a gentler swell — which is the better failure.
+ *
+ * Why this mattered visually: at 432 Hz the old law put 82.9% of the dish past
+ * the shader's slope clamp, and 87.7% at 790 Hz. A clamped region has a
+ * CONSTANT normal, so it renders as one flat tone — the "weird" quilted,
+ * hard-edged embossed pattern stamped across the water. Nothing to tune once
+ * the clamp is soft (see liquid.ts); the gain simply has to be right.
+ */
+const RELIEF_BASE = 6.5;
+const RELIEF_EXP = -0.52;
+/** Hard bounds on the optical gain, so no mode can collapse or invert the relief. */
+const RELIEF_MIN = 2.6;
+const RELIEF_MAX = 20;
 
 /**
  * Ink colour → optical density (Beer–Lambert). A pigment that *looks* like
@@ -110,11 +139,20 @@ export class LabEngine {
   time = 0;
   dead = false;
   drive: { freq: number; level: number } = { freq: 220, level: 0 };
+  /** Target drive level from the UI; engine.step smooths drive.level toward it. */
+  driveTarget = 0;
+  /**
+   * The music spectrum (tone mode): analysed audio bands already mapped onto
+   * the sim band by the UI. Non-null switches the resonance to the spectral
+   * driver — see ResonanceModel.updateSpectrum; null always means the
+   * single-frequency model, which is what the slider path sets.
+   */
+  driveSpectrum: Array<{ f: number; level: number }> | null = null;
   pointer = { x: 0.5, y: 0.5 };
   boundary: Boundary = 'rigid';
   harm = 1;
   sim: SimParams = { damp: 0.92, tension: 0.7, visc: 0.4, force: 0.6, size: 0.4, amount: 0.8, spread: 0.6, persist: 0.7 };
-  opts: LabOptions = { reflections: true, caustics: true, depth: true, nodalMap: false, grain: false, glow: false };
+  opts: LabOptions = { reflections: true, caustics: false, depth: true, nodalMap: false, grain: false, glow: false };
   gather = 0.35;      // nodal streaming (Behavior)
   diffusion = 0.12;   // pigment diffusion (Behavior)
   /** QA override for the drive — see ?drive= in Cymatics.tsx. */
@@ -131,7 +169,8 @@ export class LabEngine {
    *  phase it was rendered at — the render-on-change keys for the figure
    *  pass (per-frame allocation-free comparison of the modal state). */
   private __lastFingerprint = '';
-  private __lastBreath = 0;
+  /** Drive frequency the figure was last drawn for — see the 0b dirty check. */
+  private __lastDriveFreq = -1;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -142,12 +181,14 @@ export class LabEngine {
     // studio's real key-light shadow map, and the water accepts the shadows
     // falling INTO it (a drop's shadow on the water sells the contact).
     const dishGeo = createDishGeometry();
-    const { material: glass } = createDishMaterial();
-    this.dish = new THREE.Mesh(dishGeo, glass);
+    const { material: steel } = createDishMaterial();
+    this.dish = new THREE.Mesh(dishGeo, steel);
     this.dish.castShadow = true;
     this.dish.receiveShadow = false;
     this.dish.position.y = 0;
     this.studio.scene.add(this.dish);
+    // hand the vessel to the studio so the sweep can mirror it
+    this.studio.attachVessel();
 
     const { material, uniforms } = createLiquidMaterial();
     this.liquidUniforms = uniforms;
@@ -178,8 +219,12 @@ export class LabEngine {
     }
     this.wave = new WaveSimulation(this.studio.renderer);
     this.figure = new FigureField(this.studio.renderer);
+    // The pigment buffer follows the detected GPU tier (1024 on a discrete
+    // GPU, 768 on the lean one). It did not: the engine called the
+    // constructor bare and always got DYE_SIZE, so the advection pass ran at
+    // full cost on an integrated GPU that quality.ts had already decided was
+    // ten times too slow — the exact tiering failure the module documents.
     this.pigment = new PigmentSimulation(this.studio.renderer, this.studio.profile.dye);
-    // the water shader skips its optional taps on the lean tier
     this.liquidUniforms.uLean.value = this.studio.profile.lean;
     this.fieldTarget = makeTarget(SIM_SIZE, SIM_SIZE, THREE.HalfFloatType);
     this.combine = new FullscreenPass(COMBINE_FS, {
@@ -193,8 +238,10 @@ export class LabEngine {
     this.applyOptions();
 
     const dbg = new URLSearchParams(window.location.search).get('debug');
-    this.liquidUniforms.uDebug.value =
-      dbg === 'dye' ? 1 : dbg === 'mode' ? 2 : dbg === 'h' ? 3 : dbg === 'n' ? 6 : dbg === 'cover' ? 5 : 0;
+    const DEBUG_MODES: Record<string, number> = {
+      dye: 1, mode: 2, h: 3, cover: 5, sampler: 7, refract: 8,
+    };
+    this.liquidUniforms.uDebug.value = dbg ? (DEBUG_MODES[dbg] ?? 0) : 0;
   }
 
   /* ---------------------------------------------------------------- */
@@ -209,7 +256,6 @@ export class LabEngine {
 
   private applyOptions(): void {
     this.studio.setReflections(this.opts.reflections);
-    this.liquidUniforms.uCaustics.value = this.opts.caustics ? 1 : 0;
     this.liquidUniforms.uDepth.value = this.opts.depth ? 1 : 0;
     this.liquidUniforms.uNodal.value = this.opts.nodalMap ? 1 : 0;
   }
@@ -300,7 +346,7 @@ export class LabEngine {
     u: number, v: number, radius: number, volume: number,
     absorbance: [number, number, number],
   ): void => {
-// Contact disturbance: a broad, SOFT ring travels outward from where the drop
+    // Contact disturbance: a broad, SOFT ring travels outward from where the drop
     // landed.
     //
     // There is deliberately NO negative impulse here. An earlier version
@@ -383,6 +429,15 @@ export class LabEngine {
     this.resonance.response = r;
   }
 
+  /**
+   * Snap-follow: the silent driver's figure jumps to the slider instead of
+   * melting toward it. Kept OFF for the tone driver, which needs the smooth
+   * follow — see ResonanceModel.snapFollow.
+   */
+  setSnapFollow(v: boolean): void {
+    this.resonance.snapFollow = v;
+  }
+
   /* ---------------------------------------------------------------- */
   /* frame                                                             */
   /* ---------------------------------------------------------------- */
@@ -399,17 +454,49 @@ export class LabEngine {
     // slider uses — QA never bypasses the frequency model.
     if (this.forcedDrive) {
       this.drive.freq = excitationToSim(this.forcedDrive.freq);
-      this.drive.level = this.forcedDrive.level;
+      this.driveTarget = this.forcedDrive.level;
     }
+
+    // Smooth ramp prevents a step change in drive from looking like a shock
+    // when the user unpauses. A 0.18 s time constant is fast enough to feel
+    // responsive while removing the audible/visible click of an instant on/off.
+    const target = this.forcedDrive ? this.driveTarget : Math.max(0, Math.min(1, this.driveTarget));
+    this.drive.level += (target - this.drive.level) * Math.min(1, dt * 5.5);
 
     // 0. droplets fall first, so a landing this frame is picked up by the
     //    wave and pigment passes below in the same tick
     this.droplets.step(dt, this.dropletUvToWorld, this.onDropLand, this.onDropRelease);
 
+    // 0b. THE FIGURE MUST BE RE-RENDERED WHILE THE SLIDER MOVES.
+    //
+    // This is the reported "the frequency isn't reflecting the changes" bug,
+    // and it was caused by the render-on-change optimisation below. Moving the
+    // slider changes drive.freq; the modal amplitudes then take a full time
+    // constant (~1 s) to walk to their new targets. For that whole second the
+    // coarse fingerprint barely moved, so the figure pass was skipped and the
+    // OLD pattern stayed on screen while the readout named a different mode.
+    // Moving the slider looked like it did nothing.
+    //
+    // The fingerprint check below now rounds harder, which makes this window
+    // LONGER, so the fix is here: any real move of the drive marks the figure
+    // dirty immediately. The pass is one analytic Bessel evaluation with no
+    // solve, so a redundant draw is far cheaper than a stale figure.
+    if (Math.abs(this.drive.freq - this.__lastDriveFreq) > 0.002) {
+      this.__lastDriveFreq = this.drive.freq;
+      this.figureDirty = true;
+    }
+
     // 1. audio → modal amplitudes (built up / decayed continuously)
+    //
+    // Tone mode drives the vessel with the song's SPECTRUM (bass, mid,
+    // presence, sparkle as separate contributions — see updateSpectrum), and
+    // falls back to the single-frequency model when no spectrum was fed,
+    // which is exactly what the frequency slider still uses.
     const slots = this.noForce
       ? []
-      : this.resonance.update(dt, this.drive.freq, Math.min(1, this.drive.level));
+      : this.driveSpectrum && this.driveSpectrum.length
+        ? this.resonance.updateSpectrum(dt, this.driveSpectrum)
+        : this.resonance.update(dt, this.drive.freq, Math.min(1, this.drive.level));
 
     // 2. analytic standing figure (exact eigenfunctions), one pass, coherent breath
     const dom = slots[0];
@@ -427,14 +514,27 @@ export class LabEngine {
     // ran on every single frame. Fingerprinting (rounded m/kR/amp plus the
     // rendered breath phase) makes the render-on-change logic actually work;
     // the breath keeps advancing between renders.
-    const fingerprint = slots.map((s) => `${s.m}|${s.kR.toFixed(3)}|${s.amp.toFixed(2)}`).join(';');
-    const breathMoved = Math.abs(this.breath - this.__lastBreath) > 0.55;
-    if ((this.figureDirty || breathMoved) && !this.noFigure) {
+    // AMP COARSE IS DELIBERATE.
+    //
+    // Rendering only when the amplitudes changed meant a converged drive
+    // (the normal case once a tone is sustained) froze the pass — except the
+    // code also re-rendered whenever the BREATH phase drifted > 0.55 rad. The
+    // breath rate scales with the mode wavenumber, so on any high mode that
+    // threshold is crossed every frame or two: the expensive analytic pass ran
+    // ~30x/second for a pattern that had not changed and the frame budget
+    // collapsed (measured 9 fps). Coarsening the amplitude rounding to 0.10
+    // and gating on the coarse fingerprint means a steady state holds still,
+    // and the pass fires only when the FIGURE genuinely differs.
+    const fingerprint = slots.map((s) => `${s.m}|${s.kR.toFixed(3)}|${s.amp.toFixed(1)}`).join(';');
+    if ((this.figureDirty || fingerprint !== this.__lastFingerprint) && !this.noFigure) {
       this.figure.render(r, slots, this.breath);
       this.figureDirty = false;
-      this.__lastBreath = this.breath;
       this.__lastFingerprint = fingerprint;
     }
+    // The breath is applied in the shader from uModes[0].w, which is only
+    // written when the pass runs — so a held figure is genuinely static. That
+    // is the correct trade: the figure is a standing pattern, and shimmer came
+    // from the (now removed) per-frame redraw of an unchanged field.
 
     // 3. travelling-wave grid (strikes/drags; fixed substeps, capped catch-up)
     if (!this.__noWave) {
@@ -442,6 +542,9 @@ export class LabEngine {
         tension: this.sim.tension,
         damp: (1 - this.sim.damp) * 20 + 0.6,
         wall: 1.4,
+        // Substep cap follows the GPU tier (16 discrete / 10 lean). Passing it
+        // was missing, so WaveSimulation always used MAX_SUBSTEPS and the lean
+        // tier's catch-up saving never applied.
         maxSubsteps: this.studio.profile.substeps,
       });
     }
@@ -460,38 +563,46 @@ export class LabEngine {
     // dilution, but with the absorbances now high enough to survive mixing,
     // the fine detail is worth the slight spread.
     // The ambient churn tracks the tone: higher frequency visibly agitates
-    // the water faster, so frequency is felt as well as seen.
-    const stir = (0.0008 + Math.min(1, Math.log2(Math.max(1, this.drive.freq) / 2) / 3.4) * 0.0040
-      + Math.min(1, this.drive.level) * 0.0024) * (0.4 + this.sim.visc);
+    // the water faster, so frequency is felt as well as seen. Kept small —
+    // this is seasoning, not the transport. At the old values the stir alone
+    // smeared a pour across the whole basin in under ten seconds.
+    // Scaled down further from the earlier tuning: at the previous amplitude
+    // the curl noise shred dense pours into hard wandering ribbons that looked
+    // like scratches instead of pigment dispersing, which is the "random lines
+    // instead of natural mixing" report. Below ~0.0008 the churn is felt as
+    // gentle motion and the flow organises the ink instead of tearing it.
+    const stir = (0.00018 + Math.min(1, Math.log2(Math.max(1, this.drive.freq) / 2) / 3.4) * 0.0008
+      + Math.min(1, this.drive.level) * 0.00055) * (0.4 + this.sim.visc);
     if (!this.__noDye) this.pigment.step(r, dt, {
       // Chladni migration — the term that DRAWS the figure. Stronger than the
       // curl so nodal collection is readable, never strong enough to freeze
       // the ink: the flow keeps slowly working everything all the time.
       gather: this.gather * 1.15,
-      // a small diffusion FLOOR suppresses the texel-level noise that
-      // advection + unsharp would otherwise amplify into rainbow speckle;
-      // it also bleeds the compression ridges the settled flow builds back
-      // into soft mass
-      // Floor lowered from 0.008: every frame blends ~1% toward the static field,
-      // which over hundreds of frames blurs every pour into a thin haze faster
-      // than it can develop. The mass-only unsharp (not per-channel) is what
-      // keeps the speckle suppressed, so the floor can stay low.
-      diffusion: Math.max(0.005, Math.min(0.6, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.3)),
+      // A very small diffusion floor, and only because semi-Lagrangian
+      // advection has no numerical diffusion of its own to fall back on now
+      // that the MacCormack correction is bounded. Every frame of blur here
+      // is permanent, so the floor stays as low as the artefact allows.
+      diffusion: Math.max(0.004, Math.min(0.2, this.diffusion * (0.3 + this.sim.visc * 1.9) * 0.18)),
       // Pigment persists: real ink in water does not fade in seconds.
-      relax: 0.9993 + this.sim.persist * 0.00068,
-      // Curl transport: folds and tears pigment into wandering filaments, but
-      // kept SUBTLE — the curl noise stamps one rotation centre per noise
-      // cell, and too much of it decorates the bath with shell spirals
-      // instead of the fine tearing real stirring produces.
-      // Raised from 0.008/0.016: at the lower values pigment sat in tight cores
-      // and never stretched into filaments - the crop measured saturated cores
-      // (max 0.49) over an empty dish (mean 0.08). Transport is what draws cores
-      // out into wisps; the nodal gather underneath keeps them organised instead
-      // of letting them smear into haze.
-      flow: 0.012,
-      swirl: 0.022,
+      relax: 0.99975 + this.sim.persist * 0.00024,
+      // Curl transport: folds and tears pigment into wandering filaments.
+      // These set the SHAPE of the flow; its overall speed is capped by
+      // FLOW_MAX in DYE_FS, which is the single number that decides how fast
+      // the ink actually moves across the dish.
+      flow: 0.010,
+      swirl: 0.016,
       stir,
-      sharpen: 0.10,
+      // Limited MacCormack correction for semi-Lagrangian diffusion. Safe to
+      // apply every frame BECAUSE the shader clamps it to the neighbourhood's
+      // own range — see DYE_FS. An unlimited value here reintroduces the
+      // dash artefact within seconds.
+      //
+      // Lowered from 0.55: at that strength the limiter itself pulled local
+      // minima in dense pours down hard enough to carve thin dark channels,
+      // which is the other half of "random lines instead of natural mixing".
+      // 0.32 still restores the edges advection blurs away while letting the
+      // ink read as something that is dissolving.
+      sharpen: 0.32,
       time: this.time,
     }, this.fieldTarget.texture);
 
@@ -500,28 +611,20 @@ export class LabEngine {
     this.liquidUniforms.uDye.value = this.pigment.texture;
     this.liquidUniforms.uTime.value = this.time;
 
-    // 7. frequency-compensated relief — THE fix for "turn the pitch up and the
-    //    cymatics disappear".
+    // 7. frequency-compensated relief.
     //
-    //    A high mode carries proportionally less SLOPE at the same visual
-    //    amplitude (its cells are an order of magnitude smaller), so one
-    //    fixed optical normal gain makes fine figures vanish: crests stop
-    //    catching light and the surface goes flat glass. The caustic gain has
-    //    the opposite problem — curvature scales as k², so the same fixed
-    //    caustic constant blows fine figures out to flat white.
-    //
-    //    Both gains are therefore derived from the DOMINANT mode's wavenumber
-    //    k·R: the normal gain rises with √k to keep fine figures legible, and
-    //    the caustic gain falls with k to stop fine figures clipping. The
-    //    change is smoothed and clamped, so sweeping the slider moves relief
+    //    The optical normal gain is derived from the DOMINANT mode's wavenumber
+    //    k·R so that the tilt the eye reads stays roughly constant as the slider
+    //    walks the band. See RELIEF_BASE/RELIEF_EXP above for the measurement
+    //    behind the exponent: the gradient itself grows with k, so the gain has
+    //    to fall, and the old rising law over-drove the surface into its clamp.
+    //    The change is smoothed, so sweeping the slider moves the relief
     //    continuously — no popping, and the simulation itself is untouched.
     if (dom) {
       const kR = Math.max(0.5, dom.kR);
-      const targetNormal = clamp(RELIEF_BASE * Math.pow(kR / 10, 0.42), RELIEF_BASE * 0.9, RELIEF_BASE * 2.6);
-      const targetCaustic = CAUSTIC_BASE / Math.pow(kR / 10, 0.55);
+      const targetNormal = clamp(RELIEF_BASE * Math.pow(kR / 10, RELIEF_EXP), RELIEF_MIN, RELIEF_MAX);
       const u = this.liquidUniforms;
       u.uNormalGain.value += (targetNormal - u.uNormalGain.value) * Math.min(1, dt * 3.0);
-      u.uCausticK.value += (targetCaustic - u.uCausticK.value) * Math.min(1, dt * 3.0);
       u.uReliefMix.value = 0.42 + Math.min(0.28, Math.log2(kR / 10) * 0.16);
     }
   }
@@ -552,18 +655,35 @@ export class LabEngine {
   dyeStats(): { cells: number; mass: number } {
     const rt = (this.pigment as unknown as { targets: THREE.WebGLRenderTarget[]; idx: number });
     const target = rt.targets[rt.idx];
-    // The dye targets are HalfFloatType. Reading them into a Uint8Array returns
-    // garbage (the driver reinterprets the float bits as bytes), so a Uint8
-    // probe silently reports ~zero mass and looks exactly like "no pigment".
-    const buf = new Float32Array(DYE_SIZE * DYE_SIZE * 4);
-    this.studio.renderer.readRenderTargetPixels(target, 0, 0, DYE_SIZE, DYE_SIZE, buf);
+    // Read at the buffer's ACTUAL size — it is tier-dependent (768 lean /
+    // 1024 discrete), not the DYE_SIZE default.
+    const n = this.pigment.size;
+    // The dye targets are HalfFloatType, so they have to be read as Uint16 and
+    // decoded by hand.
+    //
+    // Reading them into a Float32Array is what this used to do, and it returns
+    // ALL ZEROS: the read type has to match the attachment's, and three.js
+    // silently produces a zero-filled buffer when it does not. The result was
+    // that every "is there any pigment in here?" probe answered no — including
+    // scripts/smoke.mjs, which read it as "clicking the water deposits nothing"
+    // while the water was visibly full of ink.
+    const raw = new Uint16Array(n * n * 4);
+    this.studio.renderer.readRenderTargetPixels(target, 0, 0, n, n, raw);
+    const h = (w: number): number => {
+      const s = (w & 0x8000) ? -1 : 1;
+      const ex = (w >> 10) & 0x1f;
+      const mn = w & 0x3ff;
+      if (ex === 0) return s * mn * 5.9604644775390625e-8;
+      if (ex === 31) return mn ? NaN : s * Infinity;
+      return s * (1 + mn / 1024) * Math.pow(2, ex - 15);
+    };
     let cells = 0;
     let total = 0;
-    for (let i = 0; i < DYE_SIZE * DYE_SIZE; i++) {
-      const a = buf[i * 4 + 3];
+    for (let i = 0; i < n * n; i++) {
+      const a = h(raw[i * 4 + 3]);
       if (a > 0.05) { cells++; total += a; }
     }
-    return { cells, mass: total / (DYE_SIZE * DYE_SIZE) };
+    return { cells, mass: total / (n * n) };
   }
 
   /** Nodal diagram of the resolved mode (preset thumbnails) — §18. */
